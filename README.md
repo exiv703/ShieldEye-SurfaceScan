@@ -253,7 +253,6 @@ Copy `.env.example` to `.env` and configure:
 | `LLM_BASE_URL` | Ollama API URL | `http://localhost:11434` |
 | `LLM_MODEL` | LLM model name | `llama3.2` |
 
-> ⚠️ **Security Note:** Always change default secrets before any production or public deployment.
 
 ### Full Requirements
 

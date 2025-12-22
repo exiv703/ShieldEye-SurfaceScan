@@ -1,0 +1,38 @@
+# Node / TypeScript
+node_modules/
+*.log
+logs/
+.log/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Environment files (keep local, never commit)
+.env
+*.env.local
+*.env.development
+*.env.production
+*.env.test
+*/.env
+*/.env.local
+*/.env.development
+*/.env.production
+*/.env.test
+
+# Runtime artifacts
+pids/
+*.pid
+coverage/
+data/
+
+# IDE / OS
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build outputs
+dist/
+build/
+

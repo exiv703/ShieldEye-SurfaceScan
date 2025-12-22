@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ShieldEye Backend Test Page</title>
+</head>
+<body>
+  <h1>ShieldEye Backend Test Page</h1>
+
+  <!-- FORM: GET + password, without explicit CSRF token -->
+  <form method="get" action="/login">
+    <label>
+      User
+      <input type="text" name="user" />
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" />
+    </label>
+    <button type="submit" onclick="console.log('login click');">Login</button>
+  </form>
+
+  <!-- Inline event handler with eval -->
+  <button onclick="eval('alert(1)')">Dangerous button</button>
+
+  <!-- Third-party iframe over HTTP -->
+  <iframe src="http://example.com/" width="400" height="200" title="Third party iframe"></iframe>
+</body>
+</html>

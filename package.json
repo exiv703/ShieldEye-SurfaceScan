@@ -1,0 +1,22 @@
+{
+  "name": "shieldeye",
+  "version": "1.0.0",
+  "description": "Simple web dependency scanner",
+  "main": "api/src/index.js",
+  "scripts": {
+    "start": "cd api && node src/index.js",
+    "dev": "cd api && npm run dev",
+    "build": "cd api && npm run build"
+  },
+  "keywords": [
+    "security",
+    "dependency-scanner"
+  ],
+  "author": "Developer",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "uuid": "^9.0.0"
+  }
+}

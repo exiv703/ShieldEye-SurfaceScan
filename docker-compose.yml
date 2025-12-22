@@ -1,0 +1,150 @@
+services:
+  # Database
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-shieldeye}
+      POSTGRES_USER: ${POSTGRES_USER:-shieldeye}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shieldeye_dev}
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shieldeye -d shieldeye"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Redis for task queue
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # MinIO for object storage
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-shieldeye}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-shieldeye_dev}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # API Gateway
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://shieldeye:shieldeye_dev@postgres:5432/shieldeye}
+      # Redis connection (app code uses REDIS_HOST/REDIS_PORT)
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-shieldeye}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-shieldeye_dev}
+      MINIO_BUCKET: ${MINIO_BUCKET:-shieldeye-artifacts}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  # Renderer Service
+  renderer:
+    build:
+      context: .
+      dockerfile: renderer/Dockerfile
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      # Redis connection (ensure host/port for internal libs)
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-shieldeye}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-shieldeye_dev}
+      MINIO_BUCKET: ${MINIO_BUCKET:-shieldeye-artifacts}
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    cap_add:
+      - SYS_ADMIN
+
+  # Analyzer Service
+  analyzer:
+    build:
+      context: .
+      dockerfile: analyzer/Dockerfile
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://shieldeye:shieldeye_dev@postgres:5432/shieldeye}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-shieldeye}
+      DB_USER: ${DB_USER:-shieldeye}
+      DB_PASSWORD: ${DB_PASSWORD:-shieldeye_dev}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-shieldeye}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-shieldeye_dev}
+      MINIO_BUCKET: ${MINIO_BUCKET:-shieldeye-artifacts}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:3000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

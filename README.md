@@ -54,7 +54,17 @@ It is designed for:
 
 ## 🖼️ Screenshots
 
-Screenshots will be added after first production deployment.
+<div align="center">
+
+| Surface Overview | Discovery Results |
+|:--:|:--:|
+| ![Surface Overview](docs/screenshots/dashboard.png) | ![Discovery Results](docs/screenshots/results.png) |
+
+| Analytics Overview | New Scan |
+|:--:|:--:|
+| ![Analytics Overview](docs/screenshots/analytics.png) | ![New Scan](docs/screenshots/new-scan.png) |
+
+</div>
 
 ---
 

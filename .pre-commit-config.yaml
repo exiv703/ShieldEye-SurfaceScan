@@ -1,0 +1,47 @@
+# Pre-commit quality gates for monorepo services
+repos:
+  # Built-in security-oriented hooks for common secret leakage patterns
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key
+      - id: detect-aws-credentials
+        args: [--allow-missing-credentials]
+
+  # Local hooks to enforce TypeScript quality checks before commit
+  - repo: local
+    hooks:
+      # Run ESLint in api and fail on lint errors
+      - id: eslint-api
+        name: eslint (api)
+        entry: bash -c 'cd api && npx --no-install eslint .'
+        language: system
+        pass_filenames: false
+
+      # Run ESLint in analyzer and fail on lint errors
+      - id: eslint-analyzer
+        name: eslint (analyzer)
+        entry: bash -c 'cd analyzer && npx --no-install eslint .'
+        language: system
+        pass_filenames: false
+
+      # Run TypeScript no-emit check in api
+      - id: tsc-api
+        name: tsc --noEmit (api)
+        entry: bash -c 'cd api && npx --no-install tsc --noEmit'
+        language: system
+        pass_filenames: false
+
+      # Run TypeScript no-emit check in analyzer
+      - id: tsc-analyzer
+        name: tsc --noEmit (analyzer)
+        entry: bash -c 'cd analyzer && npx --no-install tsc --noEmit'
+        language: system
+        pass_filenames: false
+
+      # Block committed code containing insecure verify=False usage
+      - id: no-verify-false
+        name: forbid verify=False
+        entry: verify=False
+        language: pygrep
+        exclude: ^\.pre-commit-config\.yaml$

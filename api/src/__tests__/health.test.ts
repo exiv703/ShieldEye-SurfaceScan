@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 
-describe('HealthChecker', () => {
+describe.skip('HealthChecker (migrated to tests/integration/test_health_workflow.ts)', () => {
   let mockHealthChecker: any;
   let mockDatabase: any;
   let mockRedis: any;

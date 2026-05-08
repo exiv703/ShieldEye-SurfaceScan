@@ -30,8 +30,9 @@ export class BlockchainIntegrityVerifier extends EventEmitter {
   }
 
   async analyzeSupplyChain(libraries: Library[]): Promise<{ riskAssessment: { compromisedPackages: number }, recommendations: any[] }> {
+    const compromisedPackages = libraries.filter((library) => (library.vulnerabilities?.length || 0) > 0).length;
     return {
-      riskAssessment: { compromisedPackages: 0 },
+      riskAssessment: { compromisedPackages },
       recommendations: []
     };
   }

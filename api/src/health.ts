@@ -20,7 +20,7 @@ interface HealthCheckResult {
       status: 'pass' | 'fail' | 'warn';
       message?: string;
       duration?: number;
-      metadata?: any;
+      metadata?: unknown;
     };
   };
   system: {
@@ -47,6 +47,13 @@ interface HealthCheckResult {
     };
   };
 }
+
+type HealthDependencyCheck = {
+  status: 'pass' | 'fail' | 'warn';
+  message?: string;
+  duration?: number;
+  metadata?: unknown;
+};
 
 export class HealthChecker {
   private database: Database;
@@ -78,13 +85,13 @@ export class HealthChecker {
     this.minio = new MinioClient({
       endPoint: appConfig.minio.endpoint.split(':')[0],
       port: parseInt(appConfig.minio.endpoint.split(':')[1] || '9000'),
-      useSSL: false,
+      useSSL: appConfig.tls.enabled,
       accessKey: appConfig.minio.accessKey,
       secretKey: appConfig.minio.secretKey
     });
   }
 
-  private async checkDatabase(): Promise<{ status: 'pass' | 'fail'; message?: string; duration: number; metadata?: any }> {
+  private async checkDatabase(): Promise<HealthDependencyCheck> {
     const start = Date.now();
     try {
       const poolStats = this.database.getPoolStats();
@@ -100,7 +107,15 @@ export class HealthChecker {
         status: isHealthy ? (isWarning ? 'fail' : 'pass') : 'fail',
         message: isHealthy ? (isWarning ? 'High connection usage' : 'Database operational') : 'Database connection issues',
         duration,
-        metadata: poolStats
+        metadata: {
+          ...poolStats,
+          tls: {
+            enabled: appConfig.tls.enabled,
+            rejectUnauthorized: appConfig.tls.rejectUnauthorized,
+            minVersion: appConfig.tls.minVersion,
+            caCertConfigured: Boolean(appConfig.tls.caCertPath)
+          }
+        }
       };
     } catch (error) {
       return {
@@ -111,7 +126,7 @@ export class HealthChecker {
     }
   }
 
-  private async checkRedis(): Promise<{ status: 'pass' | 'fail'; message?: string; duration: number; metadata?: any }> {
+  private async checkRedis(): Promise<HealthDependencyCheck> {
     const start = Date.now();
     try {
       const pong = await this.redis.ping();
@@ -125,6 +140,7 @@ export class HealthChecker {
         duration,
         metadata: {
           response: pong,
+          tlsEnabled: appConfig.tls.enabled,
           memoryInfo: info.split('\r\n').filter(line => line.includes('used_memory')).slice(0, 3)
         }
       };
@@ -137,7 +153,7 @@ export class HealthChecker {
     }
   }
 
-  private async checkMinio(): Promise<{ status: 'pass' | 'fail'; message?: string; duration: number; metadata?: any }> {
+  private async checkMinio(): Promise<HealthDependencyCheck> {
     const start = Date.now();
     try {
       const bucketExists = await this.minio.bucketExists(appConfig.minio.bucket);
@@ -164,7 +180,13 @@ export class HealthChecker {
         duration,
         metadata: {
           bucket: appConfig.minio.bucket,
-          endpoint: appConfig.minio.endpoint
+          endpoint: appConfig.minio.endpoint,
+          tls: {
+            enabled: appConfig.tls.enabled,
+            rejectUnauthorized: appConfig.tls.rejectUnauthorized,
+            minVersion: appConfig.tls.minVersion,
+            caCertConfigured: Boolean(appConfig.tls.caCertPath)
+          }
         }
       };
     } catch (error) {
@@ -176,7 +198,7 @@ export class HealthChecker {
     }
   }
 
-  private async checkQueue(): Promise<{ status: 'pass' | 'fail' | 'warn'; message?: string; duration: number; metadata?: any }> {
+  private async checkQueue(): Promise<HealthDependencyCheck> {
     const start = Date.now();
     try {
       const health = await this.queue.healthCheck();
@@ -223,7 +245,7 @@ export class HealthChecker {
     }
   }
 
-  private async checkDiskSpace(): Promise<{ status: 'pass' | 'fail' | 'warn'; message?: string; metadata?: any }> {
+  private async checkDiskSpace(): Promise<HealthDependencyCheck> {
     try {
       const stats = fs.statSync(process.cwd());
       const statvfs = fs.statSync(process.cwd());
@@ -451,13 +473,13 @@ export class HealthChecker {
     try {
       // Quick readiness check - just essential services with timeout
       const [dbCheck, redisCheck] = await Promise.allSettled([
-        Promise.race([
+        Promise.race<HealthDependencyCheck>([
           this.checkDatabase(),
           new Promise((_, reject) => 
             setTimeout(() => reject(new Error('Database check timeout')), 5000)
           )
         ]),
-        Promise.race([
+        Promise.race<HealthDependencyCheck>([
           this.checkRedis(),
           new Promise((_, reject) => 
             setTimeout(() => reject(new Error('Redis check timeout')), 5000)
@@ -465,8 +487,9 @@ export class HealthChecker {
         ])
       ]);
 
-      const isReady = dbCheck.status === 'fulfilled' && (dbCheck.value as any).status === 'pass' &&
-                     redisCheck.status === 'fulfilled' && (redisCheck.value as any).status === 'pass';
+      const dbReady = dbCheck.status === 'fulfilled' && dbCheck.value.status === 'pass';
+      const redisReady = redisCheck.status === 'fulfilled' && redisCheck.value.status === 'pass';
+      const isReady = dbReady && redisReady;
 
       if (isReady) {
         res.status(200).json({

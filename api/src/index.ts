@@ -12,18 +12,15 @@ import { HealthChecker } from './health';
 import { Database } from './database';
 import { TaskQueue } from './queue';
 import { setupSwagger } from './swagger';
-import { ScanRoutes } from './routes/scans';
-import { AIRoutes } from './routes/ai';
-import { AnalyticsRoutes } from './routes/analytics';
 import { createHardeningGenerateHandler } from './routes/hardening';
-import { createMinimalRouter } from './minimal/router';
 import { ensureMinioBucket } from './storage';
 import { WebSocketManager } from './websocket';
 import { 
-  cacheMiddleware, 
   deduplicationMiddleware, 
   performanceMonitoring 
 } from './performance';
+import { AppBootstrap, MiddlewareLoader } from './services/app_bootstrap';
+import { RouteRegistrar } from './services/route_registrar';
 
 const app = express();
 const PORT = serverConfig.port || 3000;
@@ -42,13 +39,7 @@ ensureMinioBucket().catch((err) => {
   logger.warn('MinIO bucket ensure failed', { error: err instanceof Error ? err.message : String(err) });
 });
 
-app.set('trust proxy', 1);
-
-app.set('x-powered-by', false);
-app.set('etag', 'strong');
-
-app.use(helmet());
-app.use(cors({ origin: serverConfig.corsOrigin }));
+new MiddlewareLoader(app, serverConfig).loadSecurityMiddleware();
 
 app.use(express.json({ 
   limit: serverConfig.maxRequestSize,
@@ -134,40 +125,6 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(rateLimit({
-  windowMs: serverConfig.rateLimitWindowMs,
-  max: serverConfig.rateLimitMax * 2, // Increase limit to reduce false positives
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    error: 'Too many requests',
-    details: 'Rate limit exceeded. Please try again later.',
-    retryAfter: Math.ceil(serverConfig.rateLimitWindowMs / 1000),
-    limit: serverConfig.rateLimitMax * 2
-  },
-  skip: (req) => {
-    return req.path === '/health' || req.path === '/ready' || req.path === '/live';
-  },
-  keyGenerator: (req) => {
-    return `${req.ip}-${req.get('User-Agent')?.substring(0, 50) || 'unknown'}`;
-  }
-}));
-
-const aiRateLimiter = rateLimit({
-  windowMs: parseInt(process.env.AI_RATE_LIMIT_WINDOW_MS || '60000', 10),
-  max: parseInt(process.env.AI_RATE_LIMIT_MAX || '10', 10),
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    error: 'Too many AI requests',
-    details: 'AI endpoint rate limit exceeded. Please slow down your requests.',
-  },
-  keyGenerator: (req) => {
-    return `${req.ip}-${req.get('User-Agent')?.substring(0, 50) || 'unknown'}`;
-  }
-});
-app.use('/api/ai', aiRateLimiter);
-
 app.use((req, res, next) => {
   req.id = uuidv4();
   res.setHeader('X-Request-Id', req.id);
@@ -227,6 +184,35 @@ const LLM_MODEL = process.env.LLM_MODEL || 'llama3.2:3b';
 const LLM_TEMPERATURE = parseFloat(process.env.LLM_TEMPERATURE || '0.2');
 const LLM_MAX_TOKENS = parseInt(process.env.LLM_MAX_TOKENS || '512', 10);
 const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '60000', 10);
+const ENABLE_EXPERIMENTAL_API = process.env.ENABLE_EXPERIMENTAL_API === 'true';
+
+function experimentalStub(
+  res: express.Response,
+  feature: string,
+  example: unknown,
+  requireDevelopment: boolean = true,
+): boolean {
+  const isEnabled = ENABLE_EXPERIMENTAL_API && (!requireDevelopment || serverConfig.nodeEnv === 'development');
+  if (!isEnabled) {
+    const enableHint = requireDevelopment
+      ? 'Set ENABLE_EXPERIMENTAL_API=true in development to test.'
+      : 'Set ENABLE_EXPERIMENTAL_API=true to test.';
+
+    res.status(501).json({
+      error: 'Not Implemented',
+      message: `${feature} is experimental. ${enableHint}`,
+      example: process.env.NODE_ENV === 'development' ? example : undefined,
+    });
+    return true;
+  }
+
+  logger.warn('Experimental endpoint accessed', {
+    feature,
+    status: 'temporary-data',
+    note: 'Real implementation planned for v1.1',
+  });
+  return false;
+}
 
 async function fetchWithTimeout(url: string, options: any, timeoutMs: number) {
   const controller = new AbortController();
@@ -444,66 +430,65 @@ app.post('/api/injection/run', async (req, res) => {
   }
 });
 
-// Production scan routes
-const scanRoutes = new ScanRoutes(database, taskQueue);
-// Use a short cache TTL so newly created scans appear quickly in the list view.
-app.use('/api/scans', cacheMiddleware(10), scanRoutes.getRouter());
-
-// Pass WebSocket manager to routes for real-time updates
-// scanRoutes.setWebSocketManager(wsManager); // TODO: Add this method to ScanRoutes
-
-// AI routes (metrics)
-const aiRoutes = new AIRoutes(database, taskQueue);
-app.use('/api/ai', aiRoutes.getRouter());
-
-// Analytics routes
-const analyticsRoutes = new AnalyticsRoutes(database);
-app.use('/api/analytics', cacheMiddleware(300), analyticsRoutes.getRouter()); // Cache for 5 minutes
-
-// Optional minimal routes (debug / fallback): enabled only when explicitly requested
-if ((process.env.ENABLE_MINIMAL_ROUTES || 'false').toLowerCase() === 'true') {
-  app.use('/api/minimal', createMinimalRouter({ database, taskQueue }));
-}
-
-// Queue stats
-app.get('/api/queue/stats', async (req, res) => {
-  try {
-    const stats = await taskQueue.getQueueStats();
-    res.json(stats);
-  } catch (error) {
-    logger.error('Failed to get queue stats', { error: error instanceof Error ? error.message : error });
-    res.status(500).json({ error: 'Failed to get queue stats' });
-  }
-});
+new RouteRegistrar(app, database, taskQueue).registerCoreRoutes();
 
 // Note: Health endpoints are registered above via HealthChecker
 
-// Monitoring endpoints (development-only mock implementations)
+// Monitoring endpoints (development-only temporary implementations)
 app.get('/api/monitoring/metrics', async (req, res) => {
-  if (serverConfig.nodeEnv !== 'development') {
-    return res.status(501).json({ error: 'Monitoring metrics are not implemented for this environment' });
+  if (
+    experimentalStub(res, 'monitoring-metrics', {
+      cpu_usage: 35.4,
+      memory_usage: 58.1,
+      disk_usage: 41.2,
+      network_io: 320.5,
+      timestamp: new Date().toISOString(),
+    })
+  ) {
+    return;
   }
+
   try {
-    const metrics = {
+    // TODO(v1.1): replace random metrics with real telemetry from monitoring storage.
+    const monitoringMetrics = {
       cpu_usage: Math.random() * 100,
       memory_usage: Math.random() * 100,
       disk_usage: Math.random() * 100,
       network_io: Math.random() * 1000,
       timestamp: new Date().toISOString(),
     };
-    res.json(metrics);
+    res.json(monitoringMetrics);
   } catch (error) {
-    logger.error('Failed to get monitoring metrics', { error: error instanceof Error ? error.message : error });
-    res.status(500).json({ error: 'Failed to get monitoring metrics' });
+    const details = error instanceof Error ? error.message : String(error);
+    logger.error('Monitoring metrics generation failed', {
+      endpoint: '/api/monitoring/metrics',
+      reason: details,
+      hint: 'Check runtime random generator and response serialization.',
+    });
+    res.status(500).json({ error: `Failed to serve monitoring metrics response: ${details}` });
   }
 });
 
 app.get('/api/monitoring/alerts', async (req, res) => {
-  if (serverConfig.nodeEnv !== 'development') {
-    return res.status(501).json({ error: 'Monitoring alerts are not implemented for this environment' });
+  if (
+    experimentalStub(res, 'monitoring-alerts', {
+      alerts: [
+        {
+          id: '1',
+          type: 'security',
+          message: 'High CPU usage detected',
+          severity: 'medium',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    })
+  ) {
+    return;
   }
+
   try {
-    const alerts = {
+    // TODO(v1.1): read alerts from persisted alerting subsystem.
+    const alertsResponse = {
       alerts: [
         {
           id: '1',
@@ -514,55 +499,104 @@ app.get('/api/monitoring/alerts', async (req, res) => {
         },
       ],
     };
-    res.json(alerts);
+    res.json(alertsResponse);
   } catch (error) {
-    logger.error('Failed to get alerts', { error: error instanceof Error ? error.message : error });
-    res.status(500).json({ error: 'Failed to get alerts' });
+    const details = error instanceof Error ? error.message : String(error);
+    logger.error('Monitoring alerts generation failed', {
+      endpoint: '/api/monitoring/alerts',
+      reason: details,
+      hint: 'Validate mock alert payload shape expected by dashboard consumers.',
+    });
+    res.status(500).json({ error: `Failed to serve monitoring alerts response: ${details}` });
   }
 });
 
-// Blockchain endpoints (development-only mock metrics)
+// Blockchain endpoints (development-only temporary metrics)
 app.get('/api/blockchain/metrics', async (req, res) => {
-  if (serverConfig.nodeEnv !== 'development') {
-    return res.status(501).json({ error: 'Blockchain metrics are not implemented for this environment' });
+  if (
+    experimentalStub(res, 'blockchain-metrics', {
+      packages_verified: 183,
+      verification_rate: 96.2,
+      integrity_score: 93.4,
+      timestamp: new Date().toISOString(),
+    })
+  ) {
+    return;
   }
+
   try {
-    const metrics = {
+    // TODO(v1.1): implement blockchain verification metrics backed by stored scan results.
+    const blockchainMetrics = {
       packages_verified: Math.floor(Math.random() * 1000),
       verification_rate: Math.random() * 100,
       integrity_score: Math.random() * 100,
       timestamp: new Date().toISOString(),
     };
-    res.json(metrics);
+    res.json(blockchainMetrics);
   } catch (error) {
-    logger.error('Failed to get blockchain metrics', { error: error instanceof Error ? error.message : error });
-    res.status(500).json({ error: 'Failed to get blockchain metrics' });
+    const details = error instanceof Error ? error.message : String(error);
+    logger.error('Blockchain metrics generation failed', {
+      endpoint: '/api/blockchain/metrics',
+      reason: details,
+      hint: 'Check mock metric field names used by blockchain dashboard widgets.',
+    });
+    res.status(500).json({ error: `Failed to serve blockchain metrics response: ${details}` });
   }
 });
 
-// Quantum endpoints (development-only mock metrics)
+// Quantum endpoints (development-only temporary metrics)
 app.get('/api/quantum/readiness', async (req, res) => {
-  if (serverConfig.nodeEnv !== 'development') {
-    return res.status(501).json({ error: 'Quantum readiness metrics are not implemented for this environment' });
+  if (
+    experimentalStub(res, 'quantum-readiness', {
+      readiness_score: 72.8,
+      algorithms_analyzed: 14,
+      migration_progress: 31.5,
+      timestamp: new Date().toISOString(),
+    })
+  ) {
+    return;
   }
+
   try {
-    const readiness = {
+    // TODO(v1.1): compute readiness from persisted crypto inventory and migration plans.
+    const readinessMetrics = {
       readiness_score: Math.random() * 100,
       algorithms_analyzed: Math.floor(Math.random() * 50),
       migration_progress: Math.random() * 100,
       timestamp: new Date().toISOString(),
     };
-    res.json(readiness);
+    res.json(readinessMetrics);
   } catch (error) {
-    logger.error('Failed to get quantum readiness', { error: error instanceof Error ? error.message : error });
-    res.status(500).json({ error: 'Failed to get quantum readiness' });
+    const details = error instanceof Error ? error.message : String(error);
+    logger.error('Quantum readiness generation failed', {
+      endpoint: '/api/quantum/readiness',
+      reason: details,
+      hint: 'Confirm readiness payload remains aligned with GUI readiness components.',
+    });
+    res.status(500).json({ error: `Failed to serve quantum readiness response: ${details}` });
   }
 });
 
 // Settings endpoints
 app.get('/api/settings', async (req, res) => {
+  if (
+    experimentalStub(
+      res,
+      'settings-read',
+      {
+        theme: 'bottle_green',
+        api_endpoint: 'http://localhost:3000',
+        timeout: 30,
+      },
+      false,
+    )
+  ) {
+    return;
+  }
+
   try {
-    const settings = {
+    // TODO(v1.1): return settings from persistent user/project configuration store.
+    const defaultSettings = {
       theme: 'bottle_green',
       api_endpoint: 'http://localhost:3000',
       timeout: 30,
@@ -575,21 +609,42 @@ app.get('/api/settings', async (req, res) => {
       encrypt_data: true,
       telemetry_enabled: false
     };
-    res.json(settings);
+    res.json(defaultSettings);
   } catch (error) {
-    logger.error('Failed to get settings', { error: error instanceof Error ? error.message : error });
-    res.status(500).json({ error: 'Failed to get settings' });
+    const details = error instanceof Error ? error.message : String(error);
+    logger.error('Settings read failed', {
+      endpoint: '/api/settings',
+      reason: details,
+      hint: 'Confirm defaults are serializable and match current frontend settings schema.',
+    });
+    res.status(500).json({ error: `Failed to read experimental settings defaults: ${details}` });
   }
 });
 
 app.put('/api/settings', async (req, res) => {
+  if (
+    experimentalStub(
+      res,
+      'settings-write',
+      { success: true, message: 'Settings updated successfully' },
+      false,
+    )
+  ) {
+    return;
+  }
+
   try {
-    // In a real implementation, save settings to database
+    // TODO(v1.1): persist settings with validation and conflict handling.
     logger.info('Settings updated', { settings: req.body });
     res.json({ success: true, message: 'Settings updated successfully' });
   } catch (error) {
-    logger.error('Failed to update settings', { error: error instanceof Error ? error.message : error });
-    res.status(500).json({ error: 'Failed to update settings' });
+    const details = error instanceof Error ? error.message : String(error);
+    logger.error('Settings update failed', {
+      endpoint: '/api/settings',
+      reason: details,
+      hint: 'Validate input payload shape before enabling persistent settings writes in v1.1.',
+    });
+    res.status(500).json({ error: `Failed to apply experimental settings update: ${details}` });
   }
 });
 
@@ -708,32 +763,12 @@ app.use((err: any, req: express.Request, res: express.Response, _next: express.N
   res.status(statusCode).json(response);
 });
 
-// Start server and graceful shutdown
-const server = app.listen(PORT, () => {
-  logger.info(`ShieldEye API running on port ${PORT}`, { port: PORT });
-  
-  // Initialize WebSocket server
-  wsManager.initialize(server);
+const appBootstrap = new AppBootstrap(app, PORT, {
+  closeDatabase: () => database.close(),
+  closeTaskQueue: () => taskQueue.close(),
+  closeWebSockets: () => wsManager.close(),
 });
 
-async function shutdown(signal: string) {
-  logger.info(`Received ${signal}, shutting down...`);
-  server.close(async () => {
-    try {
-      await Promise.all([
-        database.close(),
-        taskQueue.close(),
-        shutdownTracing()
-      ]);
-      wsManager.close();
-      logger.info('Shutdown complete');
-      process.exit(0);
-    } catch (e) {
-      logger.error('Error during shutdown', { error: e instanceof Error ? e.message : e });
-      process.exit(1);
-    }
-  });
-}
-
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+appBootstrap.start((server) => {
+  wsManager.initialize(server);
+});

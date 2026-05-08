@@ -1,12 +1,10 @@
 import Redis from 'ioredis';
 import Queue, { Job } from 'bull';
 import { Client } from 'minio';
-import { Pool, PoolClient } from 'pg';
+import { Pool } from 'pg';
 import { LibraryDetector } from './fingerprinting/library-detector';
 import { VulnerabilityFeedClient } from './vulnerability/feed-client';
-import { AdvancedRiskCalculator } from './analysis/risk-calculator';
 import { 
-  PatternUtils, 
   FindingType, 
   RiskLevel, 
   Library, 
@@ -14,13 +12,15 @@ import {
   Script
 } from '@shieldeye/shared';
 import { logger } from './logger';
-import { v4 as uuidv4 } from 'uuid';
 import { EventEmitter } from 'events';
 import { AIThreatIntelligenceEngine } from './ai/threat-intelligence';
 import { BlockchainIntegrityVerifier } from './blockchain/integrity-verifier';
 import { RealTimeMonitoringSystem } from './monitoring/realtime-monitor';
 import { AdvancedAnalyticsEngine } from './reporting/advanced-analytics';
 import { QuantumCryptoAnalyzer } from './quantum/crypto-analyzer';
+import { ScanService } from './services/scan_service';
+import { AnalysisEngine } from './services/analysis_engine';
+import { ResultPersister } from './services/result_persister';
 
 export class AnalysisWorker extends EventEmitter {
   private redis: Redis;
@@ -34,6 +34,9 @@ export class AnalysisWorker extends EventEmitter {
   private monitoringSystem: RealTimeMonitoringSystem;
   private analyticsEngine: AdvancedAnalyticsEngine;
   private quantumAnalyzer: QuantumCryptoAnalyzer;
+  private scanService!: ScanService;
+  private analysisEngineService!: AnalysisEngine;
+  private resultPersister!: ResultPersister;
   private isRunning: boolean = false;
   private processingTasks: Set<string> = new Set();
   private maxConcurrentTasks: number = 3;
@@ -101,6 +104,29 @@ export class AnalysisWorker extends EventEmitter {
         apiKey: process.env.NVD_API_KEY,
         timeout: parseInt(process.env.NVD_TIMEOUT || '30000')
       }
+    });
+
+    this.resultPersister = new ResultPersister(this.database);
+    this.analysisEngineService = new AnalysisEngine({
+      libraryDetector: this.libraryDetector,
+      vulnerabilityClient: this.vulnerabilityClient,
+      aiEngine: this.aiEngine,
+      blockchainVerifier: this.blockchainVerifier,
+      quantumAnalyzer: this.quantumAnalyzer,
+      analyticsEngine: this.analyticsEngine,
+      readObjectAsString: (bucket: string, objectName: string) => this.readObjectAsString(bucket, objectName),
+      generateScriptFingerprint: (content: string) => this.generateScriptFingerprint(content),
+      getFindingTitle: (type: FindingType) => this.getFindingTitle(type),
+      getFindingDescription: (type: FindingType, evidence: string) => this.getFindingDescription(type, evidence),
+      getFindingSeverity: (type: FindingType) => this.getFindingSeverity(type),
+    });
+    this.scanService = new ScanService({
+      analysisEngine: this.analysisEngineService,
+      resultPersister: this.resultPersister,
+      withRetry: <T>(operation: () => Promise<T>, maxAttempts?: number, delayMs?: number) =>
+        this.withRetry(operation, maxAttempts, delayMs),
+      updateScanStatus: (scanId: string, status: string, error?: string) =>
+        this.updateScanStatus(scanId, status, error),
     });
   }
 
@@ -289,273 +315,7 @@ export class AnalysisWorker extends EventEmitter {
   }
 
   private async processAnalysisTask(task: any): Promise<void> {
-    const { scanId, artifacts, domAnalysis, fetchErrors } = task;
-
-    if (fetchErrors && fetchErrors.length > 0) {
-      logger.warn('Received task with fetch errors from renderer', { scanId, fetchErrors });
-    }
-    const startTime = Date.now();
-    
-    logger.info('Processing analysis task', { scanId, startTime });
-
-    try {
-      // Update scan status to running with retry logic
-      await this.withRetry(() => this.updateScanStatus(scanId, 'running'), 3);
-
-      // Step 1: Analyze scripts and detect libraries
-      const scripts: Script[] = [];
-      const libraries: Library[] = [];
-      const findings: Finding[] = [];
-
-      // Process inline scripts
-      for (let i = 0; i < domAnalysis.scripts.inline.length; i++) {
-        const inlineScript = domAnalysis.scripts.inline[i];
-        const scriptId = uuidv4();
-        
-        // Analyze script content for risky patterns
-        const scriptFindings: Array<{ type: FindingType; evidence: string; line?: number }> =
-          PatternUtils.detectRiskyPatterns(inlineScript.content);
-        
-        // Convert to Finding objects
-        for (const pattern of scriptFindings) {
-          findings.push({
-            id: uuidv4(),
-            scanId,
-            type: pattern.type,
-            title: this.getFindingTitle(pattern.type),
-            description: this.getFindingDescription(pattern.type, pattern.evidence),
-            severity: this.getFindingSeverity(pattern.type),
-            location: {
-              scriptId,
-              line: pattern.line
-            },
-            evidence: pattern.evidence
-          });
-        }
-
-        // Detect libraries in script
-        const detections = await this.libraryDetector.detectLibraries(
-          inlineScript.content,
-          undefined, // No source URL for inline scripts
-          undefined  // No source map for inline scripts initially
-        );
-
-        // Create script record
-        const script: Script = {
-          id: scriptId,
-          scanId,
-          sourceUrl: undefined,
-          isInline: true,
-          artifactPath: `scans/${scanId}/scripts/inline-script-${i + 1}.js`,
-          fingerprint: this.generateScriptFingerprint(inlineScript.content),
-          detectedPatterns: scriptFindings.map((f) => f.type),
-          estimatedVersion: detections[0]?.version,
-          confidence: detections[0]?.confidence || 0
-        };
-
-        scripts.push(script);
-
-        // Process library detections
-        for (const detection of detections) {
-          const existingLib = libraries.find(lib => lib.name === detection.name);
-          if (existingLib) {
-            // Update existing library with higher confidence detection
-            if (detection.confidence > (existingLib.confidence ?? 0)) {
-              existingLib.detectedVersion = detection.version;
-              existingLib.confidence = detection.confidence;
-            }
-            (existingLib.relatedScripts = existingLib.relatedScripts || []).push(scriptId);
-          } else {
-            // Create new library entry
-            const library: Library = {
-              id: uuidv4(),
-              scanId,
-              name: detection.name,
-              detectedVersion: detection.version,
-              relatedScripts: [scriptId],
-              vulnerabilities: [],
-              riskScore: 0,
-              confidence: detection.confidence
-            };
-            libraries.push(library);
-          }
-        }
-      }
-
-      // Process external scripts (similar logic)
-      for (let i = 0; i < domAnalysis.scripts.external.length; i++) {
-        const externalScript = domAnalysis.scripts.external[i];
-        const scriptId = uuidv4();
-
-        // Try to fetch script content from artifacts
-        let scriptContent = '';
-        try {
-          const artifactPath = `scans/${scanId}/scripts/external-script-${i + 1}.js`;
-          const bucket = process.env.MINIO_BUCKET || 'shieldeye-artifacts';
-          scriptContent = await this.readObjectAsString(bucket, artifactPath);
-        } catch (error) {
-          logger.warn('Could not fetch external script content', { 
-            scanId, 
-            src: externalScript.src,
-            error: error instanceof Error ? error.message : error 
-          });
-        }
-
-        // Try to locate a source map referenced by this script
-        let sourceMapContent: string | undefined;
-        try {
-          const smMatch = scriptContent.match(/[#@]\s*sourceMappingURL=([^\n\r]+)/);
-          if (smMatch && smMatch[1]) {
-            const resolvedUrl = new URL(smMatch[1].trim(), externalScript.src).href;
-            const found = domAnalysis.sourceMaps.find((sm: { url: string; content?: string }) => sm.url === resolvedUrl);
-            if (found?.content) {
-              sourceMapContent = found.content;
-            }
-          }
-        } catch {}
-
-        // Detect libraries from URL/content and source map (if available)
-        const detections = await this.libraryDetector.detectLibraries(
-          scriptContent,
-          externalScript.src,
-          sourceMapContent
-        );
-
-        const script: Script = {
-          id: scriptId,
-          scanId,
-          sourceUrl: externalScript.src,
-          isInline: false,
-          artifactPath: `scans/${scanId}/scripts/external-script-${i + 1}.js`,
-          fingerprint: this.generateScriptFingerprint(scriptContent || externalScript.src),
-          detectedPatterns: [],
-          estimatedVersion: detections[0]?.version,
-          confidence: detections[0]?.confidence || 0
-        };
-
-        scripts.push(script);
-
-        // Process detections for external scripts
-        for (const detection of detections) {
-          const existingLib = libraries.find(lib => lib.name === detection.name);
-          if (existingLib) {
-            if (detection.confidence > (existingLib.confidence ?? 0)) {
-              existingLib.detectedVersion = detection.version;
-              existingLib.confidence = detection.confidence;
-            }
-            (existingLib.relatedScripts = existingLib.relatedScripts || []).push(scriptId);
-          } else {
-            const library: Library = {
-              id: uuidv4(),
-              scanId,
-              name: detection.name,
-              detectedVersion: detection.version,
-              relatedScripts: [scriptId],
-              vulnerabilities: [],
-              riskScore: 0,
-              confidence: detection.confidence
-            };
-            libraries.push(library);
-          }
-        }
-      }
-
-      // Step 2: Fetch vulnerabilities for detected libraries
-      for (const library of libraries) {
-        try {
-          const vulnerabilities = await this.vulnerabilityClient.getVulnerabilities(
-            library.name,
-            library.detectedVersion
-          );
-          library.vulnerabilities = vulnerabilities;
-          
-          // Calculate risk score for this library
-          library.riskScore = Math.round(AdvancedRiskCalculator.calculateLibraryRiskScore(
-            library,
-            findings
-          ));
-        } catch (error) {
-          logger.warn('Failed to fetch vulnerabilities for library', {
-            scanId,
-            library: library.name,
-            version: library.detectedVersion,
-            error: error instanceof Error ? error.message : error
-          });
-        }
-      }
-
-      // Step 3: AI-Powered Analysis
-      const aiAnalysis = await this.aiEngine.analyzeWithAI(libraries, findings, domAnalysis, artifacts);
-      
-      // Step 4: Blockchain Integrity Verification
-      const integrityReports = [];
-      for (const library of libraries) {
-        try {
-          const mockContent = Buffer.from(`mock-content-${library.name}`);
-          const integrityReport = await this.blockchainVerifier.verifyPackageIntegrity(
-            library.name,
-            library.detectedVersion || '1.0.0',
-            mockContent
-          );
-          integrityReports.push(integrityReport);
-        } catch (error) {
-          logger.warn('Integrity verification failed', { library: library.name, error });
-        }
-      }
-
-      // Step 5: Supply Chain Analysis
-      const supplyChainAnalysis = await this.blockchainVerifier.analyzeSupplyChain(libraries);
-
-      // Step 6: Quantum Readiness Analysis
-      const quantumReadiness = await this.quantumAnalyzer.analyzeQuantumReadiness(libraries);
-
-      // Step 7: Calculate global risk score (enhanced with AI)
-      const riskAssessment = AdvancedRiskCalculator.calculateGlobalRiskScore(libraries, findings);
-
-      // Step 8: Generate Advanced Analytics Report
-      const analyticsReport = await this.analyticsEngine.generateSecurityReport({
-        libraries,
-        findings,
-        aiAnalysis,
-        integrityReports
-      });
-
-      // Step 9: Save enhanced results to database
-      await this.saveEnhancedAnalysisResults(
-        scanId, 
-        scripts, 
-        libraries, 
-        findings, 
-        riskAssessment.score,
-        aiAnalysis,
-        integrityReports,
-        supplyChainAnalysis,
-        quantumReadiness,
-        analyticsReport
-      );
-
-      // Step 10: Update scan status to completed
-      await this.updateScanStatus(scanId, 'completed');
-
-      logger.info('Analysis completed successfully', {
-        scanId,
-        librariesFound: libraries.length,
-        vulnerabilities: libraries.reduce((sum, lib) => sum + lib.vulnerabilities.length, 0),
-        findings: findings.length,
-        inlineScripts: domAnalysis?.scripts?.inline?.length || 0,
-        externalScripts: domAnalysis?.scripts?.external?.length || 0,
-        scriptsPersisted: scripts.length,
-        riskScore: riskAssessment.score,
-      });
-
-    } catch (error) {
-      logger.error('Analysis task failed', {
-        scanId,
-        error: error instanceof Error ? error.message : error
-      });
-      
-      await this.updateScanStatus(scanId, 'failed', error instanceof Error ? error.message : 'Unknown error');
-    }
+    await this.scanService.processAnalysisTask(task);
   }
 
   private async saveEnhancedAnalysisResults(
@@ -570,114 +330,18 @@ export class AnalysisWorker extends EventEmitter {
     quantumReadiness: any,
     analyticsReport: any
   ): Promise<void> {
-    const client = await this.database.connect();
-    
-    try {
-      await client.query('BEGIN');
-
-      // Save scripts
-      for (const script of scripts) {
-        await client.query(
-          `INSERT INTO scripts (id, scan_id, source_url, is_inline, artifact_path, fingerprint, detected_patterns, estimated_version, confidence)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [script.id, script.scanId, script.sourceUrl, script.isInline, script.artifactPath, 
-           script.fingerprint, script.detectedPatterns, script.estimatedVersion, script.confidence]
-        );
-      }
-
-      // Save libraries
-      for (const library of libraries) {
-        await client.query(
-          `INSERT INTO libraries (id, scan_id, name, detected_version, related_scripts, vulnerabilities, risk_score, confidence)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [library.id, library.scanId, library.name, library.detectedVersion, 
-           library.relatedScripts, JSON.stringify(library.vulnerabilities), library.riskScore, library.confidence]
-        );
-      }
-
-      // Save findings
-      for (const finding of findings) {
-        await client.query(
-          `INSERT INTO findings (id, scan_id, type, title, description, severity, location, evidence)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [finding.id, finding.scanId, finding.type, finding.title, finding.description,
-           finding.severity, JSON.stringify(finding.location), finding.evidence]
-        );
-      }
-
-      // Save AI analysis results
-      await client.query(
-        `INSERT INTO ai_analysis (scan_id, threat_intelligence, risk_assessment, behavioral_analysis, predictions)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (scan_id) DO UPDATE SET
-         threat_intelligence = EXCLUDED.threat_intelligence,
-         risk_assessment = EXCLUDED.risk_assessment,
-         behavioral_analysis = EXCLUDED.behavioral_analysis,
-         predictions = EXCLUDED.predictions`,
-        [scanId, JSON.stringify(aiAnalysis.threatIntelligence), JSON.stringify(aiAnalysis.riskAssessment),
-         JSON.stringify(aiAnalysis.behavioralAnalysis), JSON.stringify(aiAnalysis.predictions)]
-      );
-
-      // Save integrity reports
-      for (const report of integrityReports) {
-        await client.query(
-          `INSERT INTO integrity_reports (scan_id, package_name, version, integrity_status, verification_method, confidence, details)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [scanId, report.packageName, report.version, report.integrityStatus, 
-           report.verificationMethod, report.confidence, JSON.stringify(report.details)]
-        );
-      }
-
-      // Save supply chain analysis
-      await client.query(
-        `INSERT INTO supply_chain_analysis (scan_id, risk_assessment, recommendations, supply_chain_map)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (scan_id) DO UPDATE SET
-         risk_assessment = EXCLUDED.risk_assessment,
-         recommendations = EXCLUDED.recommendations,
-         supply_chain_map = EXCLUDED.supply_chain_map`,
-        [scanId, JSON.stringify(supplyChainAnalysis.riskAssessment), 
-         JSON.stringify(supplyChainAnalysis.recommendations), JSON.stringify(supplyChainAnalysis.supplyChainMap)]
-      );
-
-      // Save quantum readiness analysis
-      await client.query(
-        `INSERT INTO quantum_readiness (scan_id, overall_readiness, crypto_inventory, threats, migration_plan, timeline, cost_estimate)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (scan_id) DO UPDATE SET
-         overall_readiness = EXCLUDED.overall_readiness,
-         crypto_inventory = EXCLUDED.crypto_inventory,
-         threats = EXCLUDED.threats,
-         migration_plan = EXCLUDED.migration_plan,
-         timeline = EXCLUDED.timeline,
-         cost_estimate = EXCLUDED.cost_estimate`,
-        [scanId, quantumReadiness.overallReadiness, JSON.stringify(quantumReadiness.cryptoInventory),
-         JSON.stringify(quantumReadiness.threats), JSON.stringify(quantumReadiness.migrationPlan),
-         JSON.stringify(quantumReadiness.timeline), JSON.stringify(quantumReadiness.costEstimate)]
-      );
-
-      // Save analytics report
-      await client.query(
-        `INSERT INTO analytics_reports (scan_id, type, title, generated_at, summary, sections, recommendations, charts)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [scanId, analyticsReport.type, analyticsReport.title, analyticsReport.generatedAt,
-         JSON.stringify(analyticsReport.summary), JSON.stringify(analyticsReport.sections),
-         JSON.stringify(analyticsReport.recommendations), JSON.stringify(analyticsReport.charts)]
-      );
-
-      // Update scan with global risk score
-      await client.query(
-        'UPDATE scans SET global_risk_score = $1 WHERE id = $2',
-        [Math.round(globalRiskScore), scanId]
-      );
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    await this.resultPersister.saveEnhancedAnalysisResults(
+      scanId,
+      scripts,
+      libraries,
+      findings,
+      globalRiskScore,
+      aiAnalysis,
+      integrityReports,
+      supplyChainAnalysis,
+      quantumReadiness,
+      analyticsReport,
+    );
   }
 
   private async saveAnalysisResults(

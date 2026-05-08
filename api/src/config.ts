@@ -1,6 +1,5 @@
 import { config } from 'dotenv';
 import { z } from 'zod';
-import { AppConfig } from '@shieldeye/shared';
 
 config();
 
@@ -25,6 +24,13 @@ const MinioConfigSchema = z.object({
   bucket: z.string().min(1, 'MinIO bucket is required')
 });
 
+const TlsConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  rejectUnauthorized: z.boolean().default(true),
+  caCertPath: z.string().optional(),
+  minVersion: z.enum(['TLSv1.2', 'TLSv1.3']).default('TLSv1.2')
+});
+
 const VulnerabilityFeedsConfigSchema = z.object({
   osv: z.object({
     baseUrl: z.string().url('OSV API URL must be valid'),
@@ -41,6 +47,7 @@ const AppConfigSchema = z.object({
   database: DatabaseConfigSchema,
   redis: RedisConfigSchema,
   minio: MinioConfigSchema,
+  tls: TlsConfigSchema,
   vulnerabilityFeeds: VulnerabilityFeedsConfigSchema
 });
 
@@ -62,6 +69,11 @@ const ServerConfigSchema = z.object({
   shutdownTimeoutMs: z.number().int().min(1000).max(60000, 'Shutdown timeout must be between 1s and 60s')
 });
 
+// Fix: export explicit config types to stabilize cross-file type inference after TLS schema changes.
+export type TlsConfigType = z.infer<typeof TlsConfigSchema>;
+export type AppConfigType = z.infer<typeof AppConfigSchema>;
+export type ServerConfigType = z.infer<typeof ServerConfigSchema>;
+
 function parseIntWithValidation(value: string | undefined, defaultValue: number, min?: number, max?: number): number {
   if (!value) return defaultValue;
   const parsed = parseInt(value, 10);
@@ -76,7 +88,7 @@ function parseBooleanWithDefault(value: string | undefined, defaultValue: boolea
   return value.toLowerCase() === 'true';
 }
 
-const rawAppConfig: AppConfig = {
+const rawAppConfig: AppConfigType = {
   database: {
     host: process.env.DB_HOST || 'localhost',
     port: parseIntWithValidation(process.env.DB_PORT, 5432, 1, 65535),
@@ -95,6 +107,12 @@ const rawAppConfig: AppConfig = {
     secretKey: process.env.MINIO_SECRET_KEY || 'shieldeye_dev',
     bucket: process.env.MINIO_BUCKET || 'shieldeye-artifacts'
   },
+  tls: {
+    enabled: parseBooleanWithDefault(process.env.TLS_ENABLED, true),
+    rejectUnauthorized: parseBooleanWithDefault(process.env.TLS_REJECT_UNAUTHORIZED, true),
+    caCertPath: process.env.TLS_CA_CERT_PATH,
+    minVersion: process.env.TLS_MIN_VERSION === 'TLSv1.3' ? 'TLSv1.3' : 'TLSv1.2'
+  },
   vulnerabilityFeeds: {
     osv: {
       baseUrl: process.env.OSV_API_URL || 'https://api.osv.dev',
@@ -108,7 +126,7 @@ const rawAppConfig: AppConfig = {
   }
 };
 
-const rawServerConfig = {
+const rawServerConfig: ServerConfigType = {
   port: parseIntWithValidation(process.env.PORT, 3000, 1, 65535),
   nodeEnv: (process.env.NODE_ENV || 'development') as 'development' | 'production' | 'test',
   corsOrigin: process.env.CORS_ORIGIN || '*',
@@ -122,7 +140,7 @@ const rawServerConfig = {
   shutdownTimeoutMs: parseIntWithValidation(process.env.SHUTDOWN_TIMEOUT_MS, 10000, 1000, 60000)
 };
 
-function validateConfig() {
+function validateConfig(): { appConfig: AppConfigType; serverConfig: ServerConfigType } {
   try {
     const validatedAppConfig = AppConfigSchema.parse(rawAppConfig);
     const validatedServerConfig = ServerConfigSchema.parse(rawServerConfig);
@@ -139,11 +157,11 @@ function validateConfig() {
         console.warn('WARNING: CORS is set to allow all origins in production. Consider restricting this.');
       }
     }
-    
+
     return { appConfig: validatedAppConfig, serverConfig: validatedServerConfig };
   } catch (error) {
     if (error instanceof z.ZodError) {
-      const errorMessages = error.errors.map(err => `${err.path.join('.')}: ${err.message}`);
+      const errorMessages = error.errors.map((err: z.ZodIssue) => `${err.path.join('.')}: ${err.message}`);
       throw new Error(`Configuration validation failed:\n${errorMessages.join('\n')}`);
     }
     throw error;
@@ -153,6 +171,14 @@ function validateConfig() {
 const { appConfig, serverConfig } = validateConfig();
 
 export { appConfig, serverConfig };
+
+if (!appConfig.tls.enabled || !appConfig.tls.rejectUnauthorized) {
+  // Fix: defer logger access to avoid config/logger circular initialization while still using winston logger.
+  void import('./logger')
+    .then(({ logger }) => {
+      logger.warn('INSECURE: TLS disabled or certificate validation bypassed. Use only in development.');
+    });
+}
 
 export { validateConfig };
 
@@ -170,7 +196,12 @@ export const configUtils = {
     const baseConfig = {
       database: {
         ...appConfig.database,
-        ssl: serverConfig.nodeEnv === 'production'
+        ssl: appConfig.tls.enabled,
+        tls: {
+          rejectUnauthorized: appConfig.tls.rejectUnauthorized,
+          minVersion: appConfig.tls.minVersion,
+          caCertPath: appConfig.tls.caCertPath
+        }
       },
       logging: {
         level: serverConfig.logLevel,
@@ -194,7 +225,7 @@ export const configUtils = {
   },
   
   validateRequiredSecrets: () => {
-    const requiredSecrets = [];
+    const requiredSecrets: string[] = [];
     
     if (configUtils.isProduction()) {
       if (!process.env.DB_PASSWORD || process.env.DB_PASSWORD === 'shieldeye_dev') {
@@ -220,6 +251,7 @@ export const configUtils = {
     console.log(`- Database: ${appConfig.database.host}:${appConfig.database.port}/${appConfig.database.database}`);
     console.log(`- Redis: ${appConfig.redis.host}:${appConfig.redis.port}`);
     console.log(`- MinIO: ${appConfig.minio.endpoint}/${appConfig.minio.bucket}`);
+    console.log(`- TLS: enabled=${appConfig.tls.enabled}, rejectUnauthorized=${appConfig.tls.rejectUnauthorized}, minVersion=${appConfig.tls.minVersion}`);
     console.log(`- Log Level: ${serverConfig.logLevel}`);
     console.log(`- Metrics Enabled: ${serverConfig.enableMetrics}`);
     console.log(`- Health Checks Enabled: ${serverConfig.enableHealthChecks}`);

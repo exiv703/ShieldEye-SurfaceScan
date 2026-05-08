@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
+import { promises as fs } from 'fs';
 import { logger } from '../logger';
-import { Library, Vulnerability, Finding } from '@shieldeye/shared';
+import { Library, Finding } from '@shieldeye/shared';
 import { AIThreatIntelligenceEngine, AIAnalysisResult } from '../ai/threat-intelligence';
 import { BlockchainIntegrityVerifier, IntegrityReport } from '../blockchain/integrity-verifier';
 
@@ -288,6 +289,7 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
   }
 
   private generateRecommendations(scanData: any): AnalyticsRecommendation[] {
+    void scanData;
     return [
       {
         id: 'rec_1',
@@ -313,6 +315,7 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
   }
 
   private generateCharts(scanData: any): ChartData[] {
+    void scanData;
     return [
       {
         id: 'vulnerability_trend',
@@ -341,6 +344,7 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
   }
 
   private async generateVulnerabilityPredictions(data: any[]): Promise<any> {
+    void data;
     return {
       next30Days: Math.floor(Math.random() * 10),
       next90Days: Math.floor(Math.random() * 25),
@@ -349,6 +353,7 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
   }
 
   private async generateRiskTrends(data: any[]): Promise<any> {
+    void data;
     return {
       trend: 'decreasing',
       expectedChange: -5,
@@ -357,7 +362,6 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
   }
 
   private async exportToJSON(report: AnalyticsReport, path: string): Promise<void> {
-    const fs = require('fs').promises;
     await fs.writeFile(path, JSON.stringify(report, null, 2));
   }
 
@@ -375,7 +379,6 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
     </body>
     </html>`;
     
-    const fs = require('fs').promises;
     await fs.writeFile(path, html);
   }
 

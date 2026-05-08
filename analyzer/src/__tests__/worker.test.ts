@@ -1,5 +1,7 @@
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { EventEmitter } from 'events';
 
 // Mock external deps that AnalysisWorker constructor touches
 jest.mock('ioredis', () => {
@@ -67,35 +69,30 @@ jest.mock('../analysis/risk-calculator', () => {
 });
 
 jest.mock('../ai/threat-intelligence', () => {
-  const { EventEmitter } = require('events');
   return {
     AIThreatIntelligenceEngine: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 
 jest.mock('../blockchain/integrity-verifier', () => {
-  const { EventEmitter } = require('events');
   return {
     BlockchainIntegrityVerifier: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 
 jest.mock('../monitoring/realtime-monitor', () => {
-  const { EventEmitter } = require('events');
   return {
     RealTimeMonitoringSystem: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 
 jest.mock('../reporting/advanced-analytics', () => {
-  const { EventEmitter } = require('events');
   return {
     AdvancedAnalyticsEngine: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 
 jest.mock('../quantum/crypto-analyzer', () => {
-  const { EventEmitter } = require('events');
   return {
     QuantumCryptoAnalyzer: jest.fn().mockImplementation(() => new EventEmitter()),
   };
@@ -130,7 +127,7 @@ describe('AnalysisWorker.processAnalysisTask safeguards', () => {
 
     const task = { scanId: 'scan-timeout', artifacts: {}, domAnalysis: {} };
 
-    const p = (w as any).processTaskWithSafeguards(task, 't-1');
+    (w as any).processTaskWithSafeguards(task, 't-1');
 
     // advance 10 minutes
     jest.advanceTimersByTime(600000);

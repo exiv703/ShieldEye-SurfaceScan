@@ -1,31 +1,76 @@
 import { Pool, PoolClient } from 'pg';
+import type { PoolConfig } from 'pg';
 import { appConfig } from './config';
 import { Scan, Library, Finding, Script, ScanStatus } from '@shieldeye/shared';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from './logger';
+import fs from 'fs';
+import { ScanRepository } from './repositories/scan_repository';
+import { LibraryRepository, FindingRepository } from './repositories/library_repository';
 
 export class Database {
   private pool: Pool;
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private isHealthy: boolean = true;
+  private scanRepository!: ScanRepository;
+  private libraryRepository!: LibraryRepository;
+  private findingRepository!: FindingRepository;
+  private deferredFeatureWarningsEmitted: Set<string> = new Set();
+
+  private returnDeferredValue<T>(methodName: string, plannedVersion: string, fallbackValue: T): T {
+    if (!this.deferredFeatureWarningsEmitted.has(methodName)) {
+      this.deferredFeatureWarningsEmitted.add(methodName);
+      logger.debug('Deferred database method called', {
+        method: methodName,
+        plannedVersion,
+        note: 'Returning temporary fallback value',
+      });
+    }
+    return fallbackValue;
+  }
+
+  // Fix: avoid `any` when reading error codes from unknown errors.
+  private getErrorCode(error: unknown): string | undefined {
+    if (typeof error === 'object' && error !== null && 'code' in error) {
+      const code = (error as { code?: unknown }).code;
+      return typeof code === 'string' ? code : undefined;
+    }
+    return undefined;
+  }
+
+  // Fix: centralize CA file loading with explicit error translation for strict-safe diagnostics.
+  private loadTlsCaCertificate(caCertPath: string): string {
+    try {
+      return fs.readFileSync(caCertPath, 'utf8');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to read TLS CA certificate from path '${caCertPath}': ${errorMessage}`);
+    }
+  }
 
   constructor() {
     const connectionString = process.env.DATABASE_URL;
-    const poolConfig = {
+    const sslConfig = appConfig.tls.enabled
+      ? {
+          rejectUnauthorized: appConfig.tls.rejectUnauthorized,
+          // Fix: keep CA optional and only load when path is provided.
+          ca: appConfig.tls.caCertPath ? this.loadTlsCaCertificate(appConfig.tls.caCertPath) : undefined,
+          minVersion: appConfig.tls.minVersion
+        }
+      : undefined;
+
+    // Fix: keep only pg-supported typed options to eliminate PoolConfig type mismatches.
+    const poolConfig: PoolConfig = {
       max: parseInt(process.env.DB_MAX_CONNECTIONS || '30'),
-      min: parseInt(process.env.DB_MIN_CONNECTIONS || '10'),
       idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '60000'),
       connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000'),
-      acquireTimeoutMillis: parseInt(process.env.DB_ACQUIRE_TIMEOUT || '15000'),
       statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT || '30000'),
       query_timeout: parseInt(process.env.DB_QUERY_TIMEOUT || '30000'),
       application_name: 'ShieldEye-API',
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      ssl: sslConfig,
       keepAlive: true,
       keepAliveInitialDelayMillis: 10000,
-      parseInputDatesAsUTC: true,
-      allowExitOnIdle: false,
-      log: process.env.NODE_ENV === 'development' ? console.log : undefined
+      allowExitOnIdle: false
     };
 
     if (connectionString) {
@@ -46,6 +91,13 @@ export class Database {
 
     this.setupEventHandlers();
     this.startHealthCheck();
+    this.scanRepository = new ScanRepository(this.pool, (operation) => this.withRetry(operation));
+    this.libraryRepository = new LibraryRepository(
+      this.pool,
+      (operation) => this.withRetry(operation),
+      (operation) => this.withTransaction(operation),
+    );
+    this.findingRepository = new FindingRepository(this.pool, (operation) => this.withRetry(operation));
   }
 
   private setupEventHandlers(): void {
@@ -66,16 +118,17 @@ export class Database {
     });
 
     this.pool.on('error', (err, client) => {
+      const errorCode = this.getErrorCode(err);
       logger.error('Database pool error', { 
         error: err.message,
         stack: err.stack,
-        code: (err as any).code,
+        code: errorCode,
         totalCount: this.pool.totalCount,
         idleCount: this.pool.idleCount
       });
       this.isHealthy = false;
       
-      if ((err as any).code === 'ECONNREFUSED' || (err as any).code === 'ETIMEDOUT') {
+      if (errorCode === 'ECONNREFUSED' || errorCode === 'ETIMEDOUT') {
         logger.warn('Database connection lost, will attempt reconnection on next query');
       }
     });
@@ -132,11 +185,11 @@ export class Database {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         
-        const errorCode = (lastError as any).code;
+        const errorCode = this.getErrorCode(lastError);
         const isRetryable = [
           'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNRESET',
           'CONNECTION_TERMINATED', 'CONNECTION_TIMEOUT'
-        ].includes(errorCode) || lastError.message.includes('timeout');
+        ].includes(errorCode ?? '') || lastError.message.includes('timeout');
         
         if (attempt === maxAttempts || !isRetryable) {
           if (isRetryable) {
@@ -360,106 +413,23 @@ export class Database {
   }
 
   async createScan(scan: Omit<Scan, 'id' | 'createdAt'>): Promise<string> {
-    return this.withRetry(async () => {
-      const id = uuidv4();
-      await this.pool.query(
-        `INSERT INTO scans (id, url, metadata, status, global_risk_score, artifact_paths, error)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [id, scan.url, JSON.stringify(scan.parameters), scan.status, scan.globalRiskScore, JSON.stringify(scan.artifactPaths), scan.error]
-      );
-      logger.debug('Scan created', { scanId: id, url: scan.url });
-      return id;
-    });
+    return this.scanRepository.createScan(scan);
   }
 
   async getScan(id: string): Promise<Scan | null> {
-    return this.withRetry(async () => {
-      const result = await this.pool.query('SELECT * FROM scans WHERE id = $1', [id]);
-      if (result.rows.length === 0) return null;
-      
-      const row = result.rows[0];
-      return {
-        id: row.id,
-        url: row.url,
-        parameters: row.metadata,
-        status: row.status as ScanStatus,
-        createdAt: row.created_at,
-        startedAt: row.started_at,
-        completedAt: row.completed_at,
-        globalRiskScore: row.global_risk_score,
-        artifactPaths: row.artifact_paths,
-        error: row.error
-      };
-    });
+    return this.scanRepository.getScan(id);
   }
 
   async getRecentScansByUrl(url: string, limit: number): Promise<Scan[]> {
-    return this.withRetry(async () => {
-      const result = await this.pool.query(
-        'SELECT * FROM scans WHERE url = $1 ORDER BY created_at DESC LIMIT $2',
-        [url, limit]
-      );
-
-      return result.rows.map((row: any) => ({
-        id: row.id,
-        url: row.url,
-        parameters: row.metadata,
-        status: row.status as ScanStatus,
-        createdAt: row.created_at,
-        startedAt: row.started_at,
-        completedAt: row.completed_at,
-        globalRiskScore: row.global_risk_score,
-        artifactPaths: row.artifact_paths,
-        error: row.error,
-      }));
-    });
+    return this.scanRepository.getRecentScansByUrl(url, limit);
   }
 
   async updateScanStatus(id: string, status: ScanStatus, error?: string): Promise<void> {
-    return this.withRetry(async () => {
-      const now = new Date();
-      let query = 'UPDATE scans SET status = $1';
-      const params: any[] = [status];
-      
-      if (status === ScanStatus.RUNNING) {
-        query += ', started_at = $2';
-        params.push(now);
-      } else if (status === ScanStatus.COMPLETED || status === ScanStatus.FAILED) {
-        query += ', completed_at = $2';
-        params.push(now);
-      }
-      
-      if (error) {
-        query += `, error = $${params.length + 1}`;
-        params.push(error);
-      }
-      
-      query += ` WHERE id = $${params.length + 1}`;
-      params.push(id);
-      
-      const result = await this.pool.query(query, params);
-      
-      if (result.rowCount === 0) {
-        throw new Error(`Scan with id ${id} not found`);
-      }
-      
-      logger.debug('Scan status updated', { scanId: id, status, error });
-    });
+    return this.scanRepository.updateScanStatus(id, status, error);
   }
 
   async updateScanRiskScore(id: string, riskScore: number): Promise<void> {
-    return this.withRetry(async () => {
-      const result = await this.pool.query(
-        'UPDATE scans SET global_risk_score = $1 WHERE id = $2',
-        [riskScore, id]
-      );
-      
-      if (result.rowCount === 0) {
-        throw new Error(`Scan with id ${id} not found`);
-      }
-      
-      logger.debug('Scan risk score updated', { scanId: id, riskScore });
-    });
+    return this.scanRepository.updateScanRiskScore(id, riskScore);
   }
 
   async listScans(limit: number, offset: number): Promise<{
@@ -468,102 +438,27 @@ export class Database {
     limit: number;
     offset: number;
   }> {
-    return this.withRetry(async () => {
-      const [rowsRes, countRes] = await Promise.all([
-        this.pool.query('SELECT * FROM scans ORDER BY created_at DESC LIMIT $1 OFFSET $2', [limit, offset]),
-        this.pool.query('SELECT COUNT(*)::int AS total FROM scans')
-      ]);
-
-      const items: Scan[] = rowsRes.rows.map((row: any) => ({
-        id: row.id,
-        url: row.url,
-        parameters: row.metadata,
-        status: row.status as ScanStatus,
-        createdAt: row.created_at,
-        startedAt: row.started_at,
-        completedAt: row.completed_at,
-        globalRiskScore: row.global_risk_score,
-        artifactPaths: row.artifact_paths,
-        error: row.error
-      }));
-
-      return {
-        items,
-        total: countRes.rows[0]?.total || 0,
-        limit,
-        offset
-      };
-    });
+    return this.scanRepository.listScans(limit, offset);
   }
 
   async deleteScan(id: string): Promise<void> {
-    return this.withRetry(async () => {
-      const result = await this.pool.query('DELETE FROM scans WHERE id = $1', [id]);
-      
-      if (result.rowCount === 0) {
-        throw new Error(`Scan with id ${id} not found`);
-      }
-      
-      logger.debug('Scan deleted', { scanId: id });
-    });
+    return this.scanRepository.deleteScan(id);
   }
 
   async createLibrary(library: Omit<Library, 'id'>): Promise<string> {
-    return this.withRetry(async () => {
-      const id = uuidv4();
-      await this.pool.query(
-        `INSERT INTO libraries (id, scan_id, name, detected_version, related_scripts, vulnerabilities, risk_score, confidence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [id, library.scanId, library.name, library.detectedVersion, library.relatedScripts, JSON.stringify(library.vulnerabilities), library.riskScore, library.confidence]
-      );
-      logger.debug('Library created', { libraryId: id, scanId: library.scanId, name: library.name });
-      return id;
-    });
+    return this.libraryRepository.createLibrary(library);
   }
 
   async getLibrariesByScan(scanId: string): Promise<Library[]> {
-    return this.withRetry(async () => {
-      const result = await this.pool.query('SELECT * FROM libraries WHERE scan_id = $1', [scanId]);
-      return result.rows.map((row: any) => ({
-        id: row.id,
-        scanId: row.scan_id,
-        name: row.name,
-        detectedVersion: row.detected_version,
-        relatedScripts: row.related_scripts,
-        vulnerabilities: row.vulnerabilities,
-        riskScore: row.risk_score,
-        confidence: row.confidence
-      }));
-    });
+    return this.libraryRepository.getLibrariesByScan(scanId);
   }
 
   async createFinding(finding: Omit<Finding, 'id'>): Promise<string> {
-    return this.withRetry(async () => {
-      const id = uuidv4();
-      await this.pool.query(
-        `INSERT INTO findings (id, scan_id, type, title, description, severity, location, evidence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [id, finding.scanId, finding.type, finding.title, finding.description, finding.severity, JSON.stringify(finding.location), finding.evidence]
-      );
-      logger.debug('Finding created', { findingId: id, scanId: finding.scanId, type: finding.type, severity: finding.severity });
-      return id;
-    });
+    return this.findingRepository.createFinding(finding);
   }
 
   async getFindingsByScan(scanId: string): Promise<Finding[]> {
-    return this.withRetry(async () => {
-      const result = await this.pool.query('SELECT * FROM findings WHERE scan_id = $1', [scanId]);
-      return result.rows.map((row: any) => ({
-        id: row.id,
-        scanId: row.scan_id,
-        type: row.type,
-        title: row.title,
-        description: row.description,
-        severity: row.severity as any,
-        location: row.location,
-        evidence: row.evidence
-      }));
-    });
+    return this.findingRepository.getFindingsByScan(scanId);
   }
 
   async createScript(script: Omit<Script, 'id'>): Promise<string> {
@@ -624,38 +519,7 @@ export class Database {
    * Returns generated IDs in the same order as the input array.
    */
   async createLibrariesBatch(libraries: Array<Omit<Library, 'id'>>): Promise<string[]> {
-    if (!libraries || libraries.length === 0) return [];
-
-    return this.withTransaction(async (client) => {
-      const ids = libraries.map(() => uuidv4());
-
-      const values: any[] = [];
-      const placeholders = libraries
-        .map((l, i) => {
-          const base = i * 8;
-          values.push(
-            ids[i],
-            l.scanId,
-            l.name,
-            l.detectedVersion ?? null,
-            l.relatedScripts ?? [],
-            JSON.stringify(l.vulnerabilities ?? []),
-            l.riskScore ?? 0,
-            l.confidence ?? 0,
-          );
-          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8})`;
-        })
-        .join(', ');
-
-      await client.query(
-        `INSERT INTO libraries (id, scan_id, name, detected_version, related_scripts, vulnerabilities, risk_score, confidence)
-         VALUES ${placeholders}`,
-        values,
-      );
-
-      logger.debug('Libraries batch created', { count: libraries.length });
-      return ids;
-    });
+    return this.libraryRepository.createLibrariesBatch(libraries);
   }
 
   async getScriptsByScan(scanId: string): Promise<Script[]> {
@@ -745,119 +609,99 @@ export class Database {
   }
 
   async getFindingsCountByTypes(types: string[]): Promise<number> {
-    if (!types || types.length === 0) {
-      return 0;
-    }
-
-    return this.withRetry(async () => {
-      const result = await this.pool.query(
-        `
-          SELECT COUNT(*)::int AS count
-          FROM findings
-          WHERE type = ANY($1::text[])
-        `,
-        [types]
-      );
-
-      return result.rows[0]?.count || 0;
-    });
+    return this.findingRepository.getFindingsCountByTypes(types);
   }
 
   async getLibrary(id: string): Promise<Library | null> {
-    return this.withRetry(async () => {
-      const result = await this.pool.query('SELECT * FROM libraries WHERE id = $1', [id]);
-      if (result.rows.length === 0) return null;
-      
-      const row = result.rows[0];
-      return {
-        id: row.id,
-        scanId: row.scan_id,
-        name: row.name,
-        detectedVersion: row.detected_version,
-        relatedScripts: row.related_scripts,
-        vulnerabilities: row.vulnerabilities,
-        riskScore: row.risk_score,
-        confidence: row.confidence
-      };
-    });
+    return this.libraryRepository.getLibrary(id);
   }
 
+  // Methods planned for a later milestone.
+  // For now they return conservative fallback values until the
+  // persistence layer for these features is implemented.
+
   async getRecentScansWithAI(days: number): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getRecentScansWithAI', 'v1.1', []);
   }
 
   async getRecentScansWithSupplyChain(days: number): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getRecentScansWithSupplyChain', 'v1.1', []);
   }
 
   async getAlerts(filters: any, limit: number, offset: number): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getAlerts', 'v1.1', []);
   }
 
   async getAlert(id: string): Promise<any | null> {
-    return null;
+    return this.returnDeferredValue('getAlert', 'v1.1', null);
   }
 
-  async acknowledgeAlert(id: string, acknowledgedBy: string): Promise<void> {}
+  async acknowledgeAlert(id: string, acknowledgedBy: string): Promise<void> {
+    return this.returnDeferredValue('acknowledgeAlert', 'v1.1', undefined);
+  }
 
-  async resolveAlert(id: string, resolvedBy: string, resolution: string): Promise<void> {}
+  async resolveAlert(id: string, resolvedBy: string, resolution: string): Promise<void> {
+    return this.returnDeferredValue('resolveAlert', 'v1.1', undefined);
+  }
 
   async getLatestMetrics(targetId: string): Promise<any | null> {
-    return null;
+    return this.returnDeferredValue('getLatestMetrics', 'v1.1', null);
   }
 
   async getMetricsHistory(targetId: string, startTime: Date, interval: string): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getMetricsHistory', 'v1.1', []);
   }
 
   async getPredictiveAlerts(type: string, timeframe: string, limit: number): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getPredictiveAlerts', 'v1.1', []);
   }
 
   async startMonitoring(targetId: string, targetType: string, config: any): Promise<string> {
-    return 'monitoring-session-id';
+    return this.returnDeferredValue('startMonitoring', 'v1.1', 'monitoring-session-id');
   }
 
-  async stopMonitoring(targetId: string): Promise<void> {}
+  async stopMonitoring(targetId: string): Promise<void> {
+    return this.returnDeferredValue('stopMonitoring', 'v1.1', undefined);
+  }
 
   async getMonitoringStatus(targetId: string): Promise<any | null> {
-    return null;
+    return this.returnDeferredValue('getMonitoringStatus', 'v1.1', null);
   }
 
   async getActiveAlerts(): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getActiveAlerts', 'v1.1', []);
   }
 
   async getRecentMetrics(timeRange: string): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getRecentMetrics', 'v1.1', []);
   }
 
   async getActiveMonitoringSessions(): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getActiveMonitoringSessions', 'v1.1', []);
   }
 
   async getAlertTrends(timeRange: string): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getAlertTrends', 'v1.1', []);
   }
 
   async getAnalyticsReports(filters: any, limit: number, offset: number): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getAnalyticsReports', 'v1.1', []);
   }
 
   async getAnalyticsReport(id: string): Promise<any | null> {
-    return null;
+    return this.returnDeferredValue('getAnalyticsReport', 'v1.1', null);
   }
 
   async saveAnalyticsReport(report: any): Promise<string> {
-    return 'report-id';
+    return this.returnDeferredValue('saveAnalyticsReport', 'v1.1', 'report-id');
   }
 
   async getTrends(metric: string, timeRange: string, granularity: string): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getTrends', 'v1.1', []);
   }
 
   async getPredictiveAnalysis(timeframe: string, confidence: number, limit: number): Promise<any[]> {
-    return [];
+    return this.returnDeferredValue('getPredictiveAnalysis', 'v1.1', []);
   }
 
   async getFindingsSeverityCounts(): Promise<Record<string, number>> {

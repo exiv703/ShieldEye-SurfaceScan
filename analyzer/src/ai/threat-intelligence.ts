@@ -19,6 +19,9 @@ export class AIThreatIntelligenceEngine extends EventEmitter {
     domAnalysis: any,
     artifacts: any
   ): Promise<AIAnalysisResult> {
+    void findings;
+    void domAnalysis;
+    void artifacts;
     const result: AIAnalysisResult = {
       threatIntelligence: { threats: [] },
       riskAssessment: { overallRisk: Math.min(100, libraries.reduce((s, l) => s + (l.riskScore || 0), 0) / (libraries.length || 1)) },

@@ -7,8 +7,9 @@ export class QuantumCryptoAnalyzer extends EventEmitter {
   }
 
   async analyzeQuantumReadiness(libraries: Library[]): Promise<{ overallReadiness: number, cryptoInventory: any[], threats: any[], migrationPlan: any, timeline: string, costEstimate: string }> {
+    const overallReadiness = Math.max(0, 80 - libraries.length);
     const result = {
-      overallReadiness: 80,
+      overallReadiness,
       cryptoInventory: [],
       threats: [],
       migrationPlan: {},

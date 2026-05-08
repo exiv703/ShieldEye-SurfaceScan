@@ -1,0 +1,81 @@
+name: CI Quality Gates
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  quality:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20, 22]
+
+    steps:
+      # Check out repository code
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Install Node.js and cache npm artifacts
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            analyzer/package-lock.json
+            shared/package-lock.json
+
+      # Cache installed node_modules and Jest cache
+      - name: Cache node_modules and Jest cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            api/node_modules
+            analyzer/node_modules
+            shared/node_modules
+            api/.jest-cache
+            analyzer/.jest-cache
+          key: ${{ runner.os }}-node-${{ matrix.node-version }}-${{ hashFiles('api/package-lock.json', 'analyzer/package-lock.json', 'shared/package-lock.json') }}
+
+      # Install dependencies for shared package and tested services
+      - name: Install dependencies
+        run: |
+          npm ci --prefix shared
+          npm ci --prefix api
+          npm ci --prefix analyzer
+
+      # Run lint checks (fails on any lint error)
+      - name: Lint
+        run: |
+          npx --no-install --prefix api eslint .
+          npx --no-install --prefix analyzer eslint .
+
+      # Run TypeScript checks without emitting files
+      - name: Typecheck
+        run: |
+          npx --no-install --prefix api tsc --noEmit
+          npx --no-install --prefix analyzer tsc --noEmit
+
+      # Run unit/integration tests separately per service
+      - name: Test
+        run: |
+          npm test --prefix api -- --ci
+          npm test --prefix analyzer -- --ci
+
+      # Enforce minimum 80% coverage separately per service
+      - name: Coverage (>= 80%)
+        run: |
+          npm test --prefix api -- --ci --coverage --cacheDirectory=.jest-cache --coverageThreshold='{"global":{"branches":80,"functions":80,"lines":80,"statements":80}}'
+          npm test --prefix analyzer -- --ci --coverage --cacheDirectory=.jest-cache --coverageThreshold='{"global":{"branches":80,"functions":80,"lines":80,"statements":80}}'
+
+      # Run Bandit security scan to gate insecure Python patterns
+      - name: Bandit
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit
+          bandit -r . -x "**/node_modules/**,**/dist/**"

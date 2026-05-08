@@ -182,11 +182,11 @@ export class LibraryDetector {
       if (sourceMap.sources) {
         for (const source of sourceMap.sources) {
           if (source.includes('node_modules')) {
-            const match = source.match(/node_modules\/([^\/]+)/);
+            const match = source.match(/node_modules\/([^/]+)/);
             if (match) {
               const packageName = match[1];
               // Try to extract version from path
-              const versionMatch = source.match(/node_modules\/[^\/]+@(\d+\.\d+\.\d+)/);
+              const versionMatch = source.match(/node_modules\/[^/]+@(\d+\.\d+\.\d+)/);
               
               detections.push({
                 name: packageName,
@@ -257,7 +257,6 @@ export class LibraryDetector {
         for (const sig of signatures) {
           if (sig.method === 'ast_pattern') {
             // Check if pattern matches any of the extracted features
-            const patternStr = sig.pattern.source;
             const hasMatch = Array.from(features.functionCalls).some(call => sig.pattern.test(call)) ||
                            Array.from(features.objectAccesses).some(access => sig.pattern.test(access)) ||
                            Array.from(features.literals).some(literal => sig.pattern.test(literal));

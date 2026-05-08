@@ -5,7 +5,9 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-shieldeye}
       POSTGRES_USER: ${POSTGRES_USER:-shieldeye}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shieldeye_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Production requires POSTGRES_PASSWORD}
+      # Optional TLS server settings example:
+      # POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     ports:
       - "55432:5432"
     volumes:
@@ -38,7 +40,9 @@ services:
       - "9001:9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-shieldeye}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-shieldeye_dev}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Production requires MINIO_ROOT_PASSWORD}
+      # Optional TLS certs example:
+      # Mount certs under /root/.minio/certs and set MINIO_SERVER_URL=https://minio:9000
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -57,15 +61,19 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://shieldeye:shieldeye_dev@postgres:5432/shieldeye}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://shieldeye:${POSTGRES_PASSWORD}@postgres:5432/shieldeye}
       # Redis connection (app code uses REDIS_HOST/REDIS_PORT)
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-shieldeye}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-shieldeye_dev}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Production requires MINIO_SECRET_KEY}
       MINIO_BUCKET: ${MINIO_BUCKET:-shieldeye-artifacts}
+      TLS_ENABLED: ${TLS_ENABLED:-true}
+      TLS_REJECT_UNAUTHORIZED: ${TLS_REJECT_UNAUTHORIZED:-true}
+      # TLS_CA_CERT_PATH: /run/secrets/internal-ca.crt
+      # Note: In development, copy .env.example and set weak passwords locally.
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,7 +101,7 @@ services:
       REDIS_PORT: ${REDIS_PORT:-6379}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-shieldeye}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-shieldeye_dev}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Production requires MINIO_SECRET_KEY}
       MINIO_BUCKET: ${MINIO_BUCKET:-shieldeye-artifacts}
     depends_on:
       redis:
@@ -110,7 +118,7 @@ services:
       dockerfile: analyzer/Dockerfile
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://shieldeye:shieldeye_dev@postgres:5432/shieldeye}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://shieldeye:${POSTGRES_PASSWORD}@postgres:5432/shieldeye}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
@@ -118,10 +126,10 @@ services:
       DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-shieldeye}
       DB_USER: ${DB_USER:-shieldeye}
-      DB_PASSWORD: ${DB_PASSWORD:-shieldeye_dev}
+      DB_PASSWORD: ${DB_PASSWORD:-${POSTGRES_PASSWORD}}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-shieldeye}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-shieldeye_dev}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Production requires MINIO_SECRET_KEY}
       MINIO_BUCKET: ${MINIO_BUCKET:-shieldeye-artifacts}
     depends_on:
       postgres:

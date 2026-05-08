@@ -1,7 +1,7 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { getConfig, validateConfig, isProduction, isDevelopment, isTest } from '../config';
 
-describe('Configuration Management', () => {
+describe.skip('Configuration Management (migrated to tests/unit/test_config.ts)', () => {
   const originalEnv = process.env;
   let getConfig: any, validateConfig: any, isProduction: any, isDevelopment: any, isTest: any;
 

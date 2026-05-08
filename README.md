@@ -28,6 +28,8 @@
 
 ShieldEye-SurfaceScan is a **security-focused web surface mapping engine** for discovering externally exposed assets and analyzing attack surface quality at scale.
 
+Maintainer note: this repo is biased toward conservative scan behavior. If in doubt, we prefer fewer requests over aggressive crawling.
+
 It is designed for:
 - **Subdomain discovery** (passive + active validation)
 - **Technology fingerprinting** with explainable confidence scoring
@@ -105,14 +107,16 @@ Why this matters: this separation keeps discovery, fingerprinting, and endpoint 
 
 ## 🚀 Quick Start
 
-### 1) Clone repository
+If you want the shortest path to "first scan": install deps, copy `.env`, run API, send one `curl`.
+
+### Clone repository
 
 ```bash
 git clone https://github.com/exiv703/ShieldEye-SurfaceScan.git
 cd ShieldEye-SurfaceScan
 ```
 
-### 2) Install dependencies
+### Install dependencies
 
 ```bash
 npm ci --prefix shared
@@ -120,15 +124,16 @@ npm ci --prefix api
 npm ci --prefix analyzer
 ```
 
-### 3) Configure environment
+### Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
 Edit `.env` with secure values (`DB_PASSWORD`, `MINIO_SECRET_KEY`, `JWT_SECRET`, `ENCRYPTION_KEY`) before running in non-dev environments.
+For local-only hacking, you can start with placeholders and rotate them before pushing anywhere shared.
 
-### 4) Run services (CLI-first workflow)
+### Run services (CLI-first workflow)
 
 ```bash
 # Option A: Full stack with containers
@@ -138,7 +143,7 @@ docker compose up -d
 npm run dev --prefix api
 ```
 
-### 5) Trigger a scan from CLI
+### Trigger a scan from CLI
 
 ```bash
 curl -X POST http://localhost:3000/api/scans \
@@ -147,12 +152,16 @@ curl -X POST http://localhost:3000/api/scans \
 ```
 
 > 🧪 GUI is currently available as an auxiliary interface (`gtk_gui_pro`), but the primary v1.0.0 flow is API/CLI-driven.
+>
+> Dev note: if scan creation works but results look empty, check API logs first — in practice this catches misconfigured env values faster than stepping through the GUI.
 
 ---
 
 ## ⚙️ Configuration
 
 ### Security and runtime flags
+
+Real-world hint: keep `ENABLE_EXPERIMENTAL_API=false` on shared/staging unless someone is actively testing those routes.
 
 | Variable | Default | Description |
 |---|---:|---|
@@ -197,6 +206,8 @@ curl -X POST http://localhost:3000/api/scans \
 | `GET` | `/metrics` | Metrics endpoint (if enabled) |
 
 ### Programmatic TypeScript example
+
+This is intentionally plain `fetch` (no SDK wrapper) so teams can paste it into scripts or CI smoke checks.
 
 ```ts
 type CreateScanResponse = { id: string; status: string };

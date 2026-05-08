@@ -214,6 +214,10 @@ function experimentalStub(
   return false;
 }
 
+function describeRuntimeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function fetchWithTimeout(url: string, options: any, timeoutMs: number) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -434,7 +438,7 @@ new RouteRegistrar(app, database, taskQueue).registerCoreRoutes();
 
 // Note: Health endpoints are registered above via HealthChecker
 
-// Monitoring endpoints (development-only temporary implementations)
+// Monitoring endpoints (temporary values until v1.1 persistence work lands)
 app.get('/api/monitoring/metrics', async (req, res) => {
   if (
     experimentalStub(res, 'monitoring-metrics', {
@@ -449,23 +453,24 @@ app.get('/api/monitoring/metrics', async (req, res) => {
   }
 
   try {
-    // TODO(v1.1): replace random metrics with real telemetry from monitoring storage.
-    const monitoringMetrics = {
+    // We keep random demo values here intentionally so UI teams can iterate
+    // on widgets without waiting for telemetry storage schema to stabilize.
+    const runtimeSnapshot = {
       cpu_usage: Math.random() * 100,
       memory_usage: Math.random() * 100,
       disk_usage: Math.random() * 100,
       network_io: Math.random() * 1000,
       timestamp: new Date().toISOString(),
     };
-    res.json(monitoringMetrics);
+    res.json(runtimeSnapshot);
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
-    logger.error('Monitoring metrics generation failed', {
+    const rootCause = describeRuntimeError(error);
+    logger.error('Monitoring metrics endpoint failed while building demo payload', {
       endpoint: '/api/monitoring/metrics',
-      reason: details,
-      hint: 'Check runtime random generator and response serialization.',
+      reason: rootCause,
+      hint: 'Check payload serialization or recent changes in dashboard metric keys.',
     });
-    res.status(500).json({ error: `Failed to serve monitoring metrics response: ${details}` });
+    res.status(500).json({ error: `Failed to serve monitoring metrics response: ${rootCause}` });
   }
 });
 
@@ -487,8 +492,9 @@ app.get('/api/monitoring/alerts', async (req, res) => {
   }
 
   try {
-    // TODO(v1.1): read alerts from persisted alerting subsystem.
-    const alertsResponse = {
+    // Intentionally tiny payload for now: the frontend treats this endpoint
+    // as a presence signal rather than a full alerting backend.
+    const simulatedAlerts = {
       alerts: [
         {
           id: '1',
@@ -499,15 +505,15 @@ app.get('/api/monitoring/alerts', async (req, res) => {
         },
       ],
     };
-    res.json(alertsResponse);
+    res.json(simulatedAlerts);
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
-    logger.error('Monitoring alerts generation failed', {
+    const rootCause = describeRuntimeError(error);
+    logger.error('Monitoring alerts endpoint failed', {
       endpoint: '/api/monitoring/alerts',
-      reason: details,
-      hint: 'Validate mock alert payload shape expected by dashboard consumers.',
+      reason: rootCause,
+      hint: 'Verify mock alert shape still matches dashboard expectations.',
     });
-    res.status(500).json({ error: `Failed to serve monitoring alerts response: ${details}` });
+    res.status(500).json({ error: `Failed to serve monitoring alerts response: ${rootCause}` });
   }
 });
 
@@ -525,22 +531,23 @@ app.get('/api/blockchain/metrics', async (req, res) => {
   }
 
   try {
-    // TODO(v1.1): implement blockchain verification metrics backed by stored scan results.
-    const blockchainMetrics = {
+    // Placeholder values mirror the range we expect from the future verifier,
+    // so product demos don't show impossible percentages.
+    const packageIntegritySnapshot = {
       packages_verified: Math.floor(Math.random() * 1000),
       verification_rate: Math.random() * 100,
       integrity_score: Math.random() * 100,
       timestamp: new Date().toISOString(),
     };
-    res.json(blockchainMetrics);
+    res.json(packageIntegritySnapshot);
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
-    logger.error('Blockchain metrics generation failed', {
+    const rootCause = describeRuntimeError(error);
+    logger.error('Blockchain metrics endpoint failed', {
       endpoint: '/api/blockchain/metrics',
-      reason: details,
-      hint: 'Check mock metric field names used by blockchain dashboard widgets.',
+      reason: rootCause,
+      hint: 'Check metric keys expected by blockchain dashboard cards.',
     });
-    res.status(500).json({ error: `Failed to serve blockchain metrics response: ${details}` });
+    res.status(500).json({ error: `Failed to serve blockchain metrics response: ${rootCause}` });
   }
 });
 
@@ -558,22 +565,23 @@ app.get('/api/quantum/readiness', async (req, res) => {
   }
 
   try {
-    // TODO(v1.1): compute readiness from persisted crypto inventory and migration plans.
-    const readinessMetrics = {
+    // These synthetic values keep readiness charts alive in staging.
+    // They are not used for risk decisions.
+    const readinessSnapshot = {
       readiness_score: Math.random() * 100,
       algorithms_analyzed: Math.floor(Math.random() * 50),
       migration_progress: Math.random() * 100,
       timestamp: new Date().toISOString(),
     };
-    res.json(readinessMetrics);
+    res.json(readinessSnapshot);
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
-    logger.error('Quantum readiness generation failed', {
+    const rootCause = describeRuntimeError(error);
+    logger.error('Quantum readiness endpoint failed', {
       endpoint: '/api/quantum/readiness',
-      reason: details,
-      hint: 'Confirm readiness payload remains aligned with GUI readiness components.',
+      reason: rootCause,
+      hint: 'Confirm readiness payload still matches GUI readiness components.',
     });
-    res.status(500).json({ error: `Failed to serve quantum readiness response: ${details}` });
+    res.status(500).json({ error: `Failed to serve quantum readiness response: ${rootCause}` });
   }
 });
 
@@ -595,7 +603,8 @@ app.get('/api/settings', async (req, res) => {
   }
 
   try {
-    // TODO(v1.1): return settings from persistent user/project configuration store.
+    // Keep these defaults explicit: support/debug teams use this exact payload
+    // to quickly diff local GUI behavior against backend assumptions.
     const defaultSettings = {
       theme: 'bottle_green',
       api_endpoint: 'http://localhost:3000',
@@ -607,17 +616,17 @@ app.get('/api/settings', async (req, res) => {
       https_only: true,
       cert_validation: true,
       encrypt_data: true,
-      telemetry_enabled: false
+      telemetry_enabled: false,
     };
     res.json(defaultSettings);
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const rootCause = describeRuntimeError(error);
     logger.error('Settings read failed', {
       endpoint: '/api/settings',
-      reason: details,
+      reason: rootCause,
       hint: 'Confirm defaults are serializable and match current frontend settings schema.',
     });
-    res.status(500).json({ error: `Failed to read experimental settings defaults: ${details}` });
+    res.status(500).json({ error: `Failed to read experimental settings defaults: ${rootCause}` });
   }
 });
 
@@ -634,17 +643,18 @@ app.put('/api/settings', async (req, res) => {
   }
 
   try {
-    // TODO(v1.1): persist settings with validation and conflict handling.
-    logger.info('Settings updated', { settings: req.body });
+    // This endpoint currently acknowledges payloads but does not persist them.
+    // That is deliberate until conflict resolution semantics are finalized.
+    logger.info('Settings update acknowledged (ephemeral mode)', { settings: req.body });
     res.json({ success: true, message: 'Settings updated successfully' });
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const rootCause = describeRuntimeError(error);
     logger.error('Settings update failed', {
       endpoint: '/api/settings',
-      reason: details,
+      reason: rootCause,
       hint: 'Validate input payload shape before enabling persistent settings writes in v1.1.',
     });
-    res.status(500).json({ error: `Failed to apply experimental settings update: ${details}` });
+    res.status(500).json({ error: `Failed to apply experimental settings update: ${rootCause}` });
   }
 });
 

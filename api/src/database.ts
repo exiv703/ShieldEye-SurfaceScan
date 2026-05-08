@@ -616,9 +616,11 @@ export class Database {
     return this.libraryRepository.getLibrary(id);
   }
 
-  // Methods planned for a later milestone.
-  // For now they return conservative fallback values until the
-  // persistence layer for these features is implemented.
+  // Deferred feature methods (v1.1 scope)
+  // Practical note: these values are intentionally boring fallbacks so
+  // dashboards stay predictable when storage pieces are still in-flight.
+
+  // AI + supply-chain snapshot queries used by overview widgets.
 
   async getRecentScansWithAI(days: number): Promise<any[]> {
     return this.returnDeferredValue('getRecentScansWithAI', 'v1.1', []);
@@ -628,8 +630,11 @@ export class Database {
     return this.returnDeferredValue('getRecentScansWithSupplyChain', 'v1.1', []);
   }
 
+  // Alert lifecycle methods: read/list + acknowledgement pipeline.
+
   async getAlerts(filters: any, limit: number, offset: number): Promise<any[]> {
-    return this.returnDeferredValue('getAlerts', 'v1.1', []);
+    const emptyAlertList: any[] = [];
+    return this.returnDeferredValue('getAlerts', 'v1.1', emptyAlertList);
   }
 
   async getAlert(id: string): Promise<any | null> {
@@ -644,6 +649,8 @@ export class Database {
     return this.returnDeferredValue('resolveAlert', 'v1.1', undefined);
   }
 
+  // Monitoring telemetry used by live dashboard cards.
+
   async getLatestMetrics(targetId: string): Promise<any | null> {
     return this.returnDeferredValue('getLatestMetrics', 'v1.1', null);
   }
@@ -657,7 +664,8 @@ export class Database {
   }
 
   async startMonitoring(targetId: string, targetType: string, config: any): Promise<string> {
-    return this.returnDeferredValue('startMonitoring', 'v1.1', 'monitoring-session-id');
+    const provisionalSessionId = 'monitoring-session-id';
+    return this.returnDeferredValue('startMonitoring', 'v1.1', provisionalSessionId);
   }
 
   async stopMonitoring(targetId: string): Promise<void> {
@@ -669,7 +677,8 @@ export class Database {
   }
 
   async getActiveAlerts(): Promise<any[]> {
-    return this.returnDeferredValue('getActiveAlerts', 'v1.1', []);
+    const noActiveAlerts: any[] = [];
+    return this.returnDeferredValue('getActiveAlerts', 'v1.1', noActiveAlerts);
   }
 
   async getRecentMetrics(timeRange: string): Promise<any[]> {
@@ -684,6 +693,8 @@ export class Database {
     return this.returnDeferredValue('getAlertTrends', 'v1.1', []);
   }
 
+  // Analytics/reporting surface consumed by reporting screens.
+
   async getAnalyticsReports(filters: any, limit: number, offset: number): Promise<any[]> {
     return this.returnDeferredValue('getAnalyticsReports', 'v1.1', []);
   }
@@ -693,7 +704,8 @@ export class Database {
   }
 
   async saveAnalyticsReport(report: any): Promise<string> {
-    return this.returnDeferredValue('saveAnalyticsReport', 'v1.1', 'report-id');
+    const provisionalReportId = 'report-id';
+    return this.returnDeferredValue('saveAnalyticsReport', 'v1.1', provisionalReportId);
   }
 
   async getTrends(metric: string, timeRange: string, granularity: string): Promise<any[]> {

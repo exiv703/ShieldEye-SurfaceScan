@@ -9,10 +9,16 @@ import * as http from 'http';
 
 export class RenderWorker {
   private queue: import('bull').Queue<ScanTask>;
-  private analysisQueue: import('bull').Queue<any>;
+  private analysisQueue: import('bull').Queue<AnalysisTaskPayload>;
   private browserManager: BrowserManager;
   private storageManager: StorageManager;
   private redis: Redis;
+
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private readonly componentName = 'render-worker';
 
   constructor() {
     const redisConfig = {
@@ -32,7 +38,7 @@ export class RenderWorker {
     });
 
     // Bull-based analysis queue for consistency and observability
-    this.analysisQueue = new Queue<any>('analysis-queue', {
+    this.analysisQueue = new Queue<AnalysisTaskPayload>('analysis-queue', {
       redis: redisConfig,
       defaultJobOptions: {
         removeOnComplete: 50,
@@ -61,6 +67,8 @@ export class RenderWorker {
 
     this.queue.on('completed', (job: Job<ScanTask>, result: TaskResult) => {
       logger.info('Render job completed', { 
+        component: this.componentName,
+        stage: 'completed',
         jobId: job.id,
         scanId: result.scanId,
         success: result.success 
@@ -69,6 +77,8 @@ export class RenderWorker {
 
     this.queue.on('failed', (job: Job<ScanTask>, err: Error) => {
       logger.error('Render job failed', { 
+        component: this.componentName,
+        stage: 'failed',
         jobId: job.id,
         scanId: job.data.scanId,
         error: err.message 
@@ -102,8 +112,8 @@ export class RenderWorker {
   private async withBrowserRetry<T>(fn: () => Promise<T>, retries: number = 1): Promise<T> {
     try {
       return await fn();
-    } catch (e: any) {
-      const msg = String(e?.message || e);
+    } catch (e: unknown) {
+      const msg = this.getErrorMessage(e);
       if (retries > 0 && /browser|context|page has been closed/i.test(msg)) {
         try {
           await this.browserManager.close();
@@ -118,7 +128,12 @@ export class RenderWorker {
   private async processScanJob(task: ScanTask, job: Job<ScanTask>): Promise<TaskResult> {
     const { scanId, url } = task;
 
-    logger.info('Starting render job', { scanId, url });
+    logger.info('Starting render job', {
+      component: this.componentName,
+      stage: 'start',
+      scanId,
+      url,
+    });
 
     try {
       const parameters: any = (task as any).parameters || {};
@@ -168,9 +183,11 @@ export class RenderWorker {
         domSnapshotPath = await this.storageManager.uploadDOMSnapshot(scanId, domContent);
       } catch (e) {
         logger.warn('Failed to capture/upload DOM snapshot', {
+          component: this.componentName,
+          stage: 'capture_dom',
           scanId,
           url,
-          error: e instanceof Error ? e.message : e,
+          error: this.getErrorMessage(e),
         });
       }
 
@@ -231,6 +248,8 @@ export class RenderWorker {
       await job.progress(70);
 
       logger.info('Render DOM metrics', {
+        component: this.componentName,
+        stage: 'render_metrics',
         scanId,
         inlineScripts: domAnalysis?.scripts?.inline?.length || 0,
         externalScripts: externalCount,
@@ -265,7 +284,11 @@ export class RenderWorker {
 
       await job.progress(100);
 
-      logger.info('Render+analysis pipeline completed', { scanId });
+      logger.info('Render+analysis pipeline completed', {
+        component: this.componentName,
+        stage: 'pipeline_completed',
+        scanId,
+      });
 
       return {
         scanId,
@@ -274,22 +297,18 @@ export class RenderWorker {
       };
     } catch (error) {
       logger.error('Render job failed', {
+        component: this.componentName,
+        stage: 'pipeline_failed',
         scanId,
         url,
-        error: error instanceof Error ? error.message : error
+        error: this.getErrorMessage(error)
       });
 
       throw error instanceof Error ? error : new Error(String(error));
     }
   }
 
-  private async publishAnalysisTask(payload: {
-    scanId: string;
-    artifacts: any;
-    domAnalysis: any;
-    fetchErrors: any[];
-    createdAt: Date;
-  }): Promise<Job<any>> {
+  private async publishAnalysisTask(payload: AnalysisTaskPayload): Promise<Job<AnalysisTaskPayload>> {
     const { scanId } = payload;
     try {
       // Publish to Bull analysis queue
@@ -303,8 +322,10 @@ export class RenderWorker {
       return job;
     } catch (error) {
       logger.error('Failed to publish analysis task', { 
+        component: this.componentName,
+        stage: 'publish_analysis',
         scanId, 
-        error: error instanceof Error ? error.message : error 
+        error: this.getErrorMessage(error),
       });
       throw error instanceof Error ? error : new Error(String(error));
     }
@@ -423,21 +444,38 @@ export class RenderWorker {
   async initialize(): Promise<void> {
     await this.storageManager.initialize();
     await this.browserManager.initialize();
-    logger.info('Render worker initialized');
+    logger.info('Render worker initialized', {
+      component: this.componentName,
+      stage: 'initialized',
+    });
   }
 
   async shutdown(): Promise<void> {
-    logger.info('Shutting down render worker...');
+    logger.info('Shutting down render worker...', {
+      component: this.componentName,
+      stage: 'shutdown_start',
+    });
 
     await this.queue.close();
     await this.analysisQueue.close();
     this.redis.disconnect();
     await this.browserManager.close();
 
-    logger.info('Render worker shutdown complete');
+    logger.info('Render worker shutdown complete', {
+      component: this.componentName,
+      stage: 'shutdown_done',
+    });
   }
 
-  private async sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
 }
+
+type AnalysisTaskPayload = {
+  scanId: string;
+  artifacts: {
+    domSnapshot?: string;
+    scripts: string[];
+  };
+  domAnalysis: unknown;
+  fetchErrors: Array<{ type: string; url?: string; message?: string; error?: string }>;
+  createdAt: Date;
+};

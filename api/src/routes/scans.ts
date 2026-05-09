@@ -57,6 +57,22 @@ export class ScanRoutes {
     this.setupRoutes();
   }
 
+  private sendClientError(
+    res: Response,
+    statusCode: number,
+    error: string,
+    code: string,
+    hint: string,
+    extra?: Record<string, unknown>,
+  ): void {
+    res.status(statusCode).json({
+      error,
+      code,
+      hint,
+      ...(extra || {}),
+    });
+  }
+
   private async getLastGoodScanForUrl(req: Request, res: Response): Promise<void> {
     try {
       const url = (req.query.url as string || '').trim();
@@ -157,10 +173,14 @@ export class ScanRoutes {
     try {
       const validation = ScanRequestSchema.safeParse(req.body);
       if (!validation.success) {
-        res.status(400).json({
-          error: 'Invalid request parameters',
-          details: validation.error.errors
-        });
+        this.sendClientError(
+          res,
+          400,
+          'Invalid request parameters',
+          'INVALID_SCAN_REQUEST',
+          'Validate request body against ScanRequest schema before submitting.',
+          { details: validation.error.errors },
+        );
         return;
       }
 
@@ -171,13 +191,18 @@ export class ScanRoutes {
         const message =
           err instanceof Error ? err.message : 'Invalid or disallowed target URL';
         logger.warn('Rejected scan due to invalid or disallowed URL', {
+          stage: 'validate_target_url',
           url: scanRequest.url,
           error: message,
         });
-        res.status(400).json({
-          error: 'Invalid or disallowed target URL',
-          details: message,
-        });
+        this.sendClientError(
+          res,
+          400,
+          'Invalid or disallowed target URL',
+          'DISALLOWED_TARGET_URL',
+          'Use a publicly reachable http/https URL outside localhost/private ranges.',
+          { details: message },
+        );
         return;
       }
 
@@ -193,15 +218,20 @@ export class ScanRoutes {
             if (diffSeconds < cooldownSeconds) {
               const retryAfter = Math.ceil(cooldownSeconds - diffSeconds);
               logger.warn('Rejected scan due to per-URL cooldown', {
+                stage: 'cooldown_check',
                 url: scanRequest.url,
                 lastScanId: latest.id,
                 secondsSinceLastScan: diffSeconds,
                 cooldownSeconds,
               });
-              res.status(429).json({
-                error: 'Too many scans for this URL. Please retry later.',
-                retryAfterSeconds: retryAfter,
-              });
+              this.sendClientError(
+                res,
+                429,
+                'Too many scans for this URL. Please retry later.',
+                'SCAN_URL_COOLDOWN_ACTIVE',
+                'Wait for the cooldown window to expire or reduce duplicate submissions.',
+                { retryAfterSeconds: retryAfter },
+              );
               return;
             }
           }
@@ -241,6 +271,7 @@ export class ScanRoutes {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
       logger.error('Error creating scan', { 
+        stage: 'create_scan',
         errorMessage,
         requestBody: req.body,
         stack: error instanceof Error ? error.stack : undefined

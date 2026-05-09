@@ -5,6 +5,37 @@ import { logger } from './logger';
 export class BrowserManager {
   private browser: Browser | null = null;
   private contexts: Map<string, BrowserContext> = new Map();
+  private readonly componentName = 'browser-manager';
+
+  private parseBooleanEnv(varName: string, defaultValue: boolean): boolean {
+    const raw = process.env[varName];
+    if (raw === undefined) return defaultValue;
+
+    const normalized = raw.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+
+    logger.warn('Invalid boolean environment value, falling back to default', {
+      component: this.componentName,
+      stage: 'config_parse',
+      envVar: varName,
+      received: raw,
+      defaultValue,
+    });
+    return defaultValue;
+  }
+
+  private shouldIgnoreHttpsErrors(): boolean {
+    const requested = this.parseBooleanEnv('BROWSER_IGNORE_HTTPS_ERRORS', false);
+    if (requested && process.env.NODE_ENV === 'production') {
+      logger.warn('Ignoring HTTPS errors is blocked in production. Set NODE_ENV!=production for this override.', {
+        component: this.componentName,
+        stage: 'tls_guard',
+      });
+      return false;
+    }
+    return requested;
+  }
 
   async initialize(): Promise<void> {
     try {
@@ -20,9 +51,16 @@ export class BrowserManager {
           '--disable-gpu'
         ]
       });
-      logger.info('Browser initialized successfully');
+      logger.info('Browser initialized successfully', {
+        component: this.componentName,
+        stage: 'initialized',
+      });
     } catch (error) {
-      logger.error('Failed to initialize browser', { error: error instanceof Error ? error.message : error });
+      logger.error('Failed to initialize browser', {
+        component: this.componentName,
+        stage: 'initialize_failed',
+        error: error instanceof Error ? error.message : error,
+      });
       throw error;
     }
   }
@@ -35,10 +73,18 @@ export class BrowserManager {
       throw new Error('Browser not initialized');
     }
 
+    const ignoreHttpsErrors = this.shouldIgnoreHttpsErrors();
+    if (ignoreHttpsErrors) {
+      logger.warn('Browser context running with TLS certificate verification disabled (BROWSER_IGNORE_HTTPS_ERRORS=true).', {
+        component: this.componentName,
+        stage: 'context_create',
+      });
+    }
+
     const context = await this.browser.newContext({
       viewport: { width: 1920, height: 1080 },
       userAgent: opts.userAgent || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 ShieldEye/1.0',
-      ignoreHTTPSErrors: true,
+      ignoreHTTPSErrors: ignoreHttpsErrors,
       javaScriptEnabled: opts.javaScriptEnabled !== false
     });
 
@@ -118,27 +164,37 @@ export class BrowserManager {
           try {
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
             const links: string[] = await page.$$eval('a[href]', (elements) =>
-              (elements as any[])
-                .map((a: any) => a.getAttribute('href') || '')
-                .filter((v: string) => !!v)
+              (elements as Array<{ getAttribute: (name: string) => string | null }>)
+                .map((element) => element.getAttribute('href') || '')
+                .filter((href) => href.length > 0)
             );
             for (const href of links) {
               try {
                 const resolved = new URL(href, url).href;
                 if (sameOriginOnly && new URL(resolved).origin !== origin) continue;
-                if (resolved.startsWith('http')) {
+                if (/^https?:\/\//.test(resolved)) {
                   queue.push({ url: resolved, d: d + 1 });
                 }
               } catch {}
             }
           } catch (e) {
-            logger.warn('Failed to extract links during crawl', { url, error: e instanceof Error ? e.message : e });
+            logger.warn('Failed to extract links during crawl', {
+              component: this.componentName,
+              stage: 'crawl_extract_links',
+              url,
+              error: e instanceof Error ? e.message : e,
+            });
           } finally {
             await page.close();
           }
         }
       } catch (e) {
-        logger.warn('Failed to analyze page during crawl', { url, error: e instanceof Error ? e.message : e });
+        logger.warn('Failed to analyze page during crawl', {
+          component: this.componentName,
+          stage: 'crawl_analyze_page',
+          url,
+          error: e instanceof Error ? e.message : e,
+        });
       }
     }
 
@@ -226,20 +282,24 @@ export class BrowserManager {
 
       await page.waitForTimeout(2000);
 
-      const scriptElements = await page.$$eval('script', (elements) => {
-        return (elements as any[]).map((script: any) => {
+      const scriptElements = await page.$$eval('script', (elements) =>
+        (elements as Array<{
+          src?: string;
+          innerHTML?: string;
+          attributes?: Array<{ name: string; value: string }>;
+        }>).map((script) => {
           const attributes: Record<string, string> = {};
-          for (const attr of script.attributes) {
+          for (const attr of script.attributes || []) {
             attributes[attr.name] = attr.value;
           }
           return {
-            src: script.src as string,
-            content: (script.innerHTML || '') as string,
+            src: script.src || '',
+            content: script.innerHTML || '',
             attributes,
-            isInline: !script.src
+            isInline: !script.src,
           };
-        });
-      });
+        })
+      );
 
       for (const script of scriptElements) {
         if (script.isInline) {
@@ -327,6 +387,9 @@ export class BrowserManager {
       this.browser = null;
     }
 
-    logger.info('Browser manager closed');
+    logger.info('Browser manager closed', {
+      component: this.componentName,
+      stage: 'closed',
+    });
   }
 }

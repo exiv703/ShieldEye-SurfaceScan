@@ -6,20 +6,47 @@ export class StorageManager {
   private client: Client;
   private bucketName: string;
 
+  private parseEndpoint(endpoint: string): { host: string; port: number } {
+    const [host, rawPort] = endpoint.split(':');
+    const port = Number.parseInt(rawPort || '', 10);
+
+    if (!host) {
+      throw new Error(`Invalid MinIO endpoint '${endpoint}': missing host`);
+    }
+
+    return {
+      host,
+      port: Number.isFinite(port) && port > 0 ? port : 9000,
+    };
+  }
+
+  private resolveUseSsl(endpoint: string): boolean {
+    const explicit = (process.env.MINIO_USE_SSL || '').trim().toLowerCase();
+    if (explicit === 'true') return true;
+    if (explicit === 'false') return false;
+    return endpoint.endsWith(':443') || endpoint.endsWith(':9443');
+  }
+
   constructor(config: {
     endpoint: string;
     accessKey: string;
     secretKey: string;
     bucket: string;
   }) {
+    const endpoint = this.parseEndpoint(config.endpoint);
+    const useSSL = this.resolveUseSsl(config.endpoint);
     this.client = new Client({
-      endPoint: config.endpoint.split(':')[0],
-      port: parseInt(config.endpoint.split(':')[1]) || 9000,
-      useSSL: false,
+      endPoint: endpoint.host,
+      port: endpoint.port,
+      useSSL,
       accessKey: config.accessKey,
       secretKey: config.secretKey
     });
     this.bucketName = config.bucket;
+
+    if (!useSSL && process.env.NODE_ENV === 'production') {
+      logger.warn('StorageManager MinIO client is running without TLS in production. Set MINIO_USE_SSL=true.');
+    }
   }
 
   async initialize(): Promise<void> {
@@ -159,23 +186,26 @@ export class StorageManager {
       const objectsList = this.client.listObjects(this.bucketName, `scans/${scanId}/`, true);
       const objectsToDelete: string[] = [];
 
-      objectsList.on('data', (obj) => {
-        if (obj.name) {
-          objectsToDelete.push(obj.name);
-        }
+      await new Promise<void>((resolve, reject) => {
+        objectsList.on('data', (obj: { name?: string }) => {
+          if (obj.name) {
+            objectsToDelete.push(obj.name);
+          }
+        });
+
+        objectsList.on('end', () => {
+          resolve();
+        });
+
+        objectsList.on('error', (error: Error) => {
+          reject(error);
+        });
       });
 
-      objectsList.on('end', async () => {
-        if (objectsToDelete.length > 0) {
-          await this.client.removeObjects(this.bucketName, objectsToDelete);
-          logger.info('Scan artifacts deleted', { scanId, count: objectsToDelete.length });
-        }
-      });
-
-      objectsList.on('error', (error) => {
-        logger.error('Failed to list scan artifacts for deletion', { scanId, error: error.message });
-        throw error;
-      });
+      if (objectsToDelete.length > 0) {
+        await this.client.removeObjects(this.bucketName, objectsToDelete);
+        logger.info('Scan artifacts deleted', { scanId, count: objectsToDelete.length });
+      }
     } catch (error) {
       logger.error('Failed to delete scan artifacts', { scanId, error: error instanceof Error ? error.message : error });
       throw error;

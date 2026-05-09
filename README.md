@@ -169,6 +169,8 @@ Real-world hint: keep `ENABLE_EXPERIMENTAL_API=false` on shared/staging unless s
 | `ENABLE_MINIMAL_ROUTES` | `false` | Enables legacy minimal API router under `/api/minimal` |
 | `ENABLE_METRICS` | `true` | Exposes `/metrics` endpoint |
 | `ENABLE_HEALTH_CHECKS` | `true` | Enables health/readiness/liveness endpoints |
+| `BROWSER_IGNORE_HTTPS_ERRORS` | `false` | Development-only toggle to bypass TLS certificate validation in renderer browser contexts |
+| `MINIO_USE_SSL` | _(auto by port or explicit)_ | Forces MinIO client TLS transport (`true`/`false`) across analyzer/renderer |
 
 ### TLS defaults (secure by default)
 

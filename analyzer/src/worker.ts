@@ -42,6 +42,15 @@ export class AnalysisWorker extends EventEmitter {
   private maxConcurrentTasks: number = 3;
   private taskTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
+  private resolveMinioUseSsl(endpoint: string): boolean {
+    const explicit = (process.env.MINIO_USE_SSL || '').trim().toLowerCase();
+    if (explicit === 'true') return true;
+    if (explicit === 'false') return false;
+
+    // Conservative fallback: infer TLS for standard secure ports.
+    return endpoint.endsWith(':443') || endpoint.endsWith(':9443');
+  }
+
   constructor() {
     super();
 
@@ -70,13 +79,18 @@ export class AnalysisWorker extends EventEmitter {
 
     // Initialize MinIO
     const minioEndpoint = process.env.MINIO_ENDPOINT || 'localhost:9000';
+    const minioUseSsl = this.resolveMinioUseSsl(minioEndpoint);
     this.minio = new Client({
       endPoint: minioEndpoint.split(':')[0],
       port: parseInt(minioEndpoint.split(':')[1]) || 9000,
-      useSSL: false,
+      useSSL: minioUseSsl,
       accessKey: process.env.MINIO_ACCESS_KEY || 'shieldeye',
       secretKey: process.env.MINIO_SECRET_KEY || 'shieldeye_dev'
     });
+
+    if (!minioUseSsl && process.env.NODE_ENV === 'production') {
+      logger.warn('MinIO TLS is disabled in production mode. Set MINIO_USE_SSL=true for secure transport.');
+    }
 
     // Initialize Database (supports DATABASE_URL or DB_* vars)
     const databaseUrl = process.env.DATABASE_URL;
@@ -462,17 +476,17 @@ export class AnalysisWorker extends EventEmitter {
 
   private getFindingDescription(type: FindingType, evidence: string): string {
     const descriptions: Partial<Record<FindingType, string>> = {
-      [FindingType.CVE]: 'Known vulnerability identified (CVE).',
-      [FindingType.EVAL_USAGE]: 'Use of eval() function detected, which can lead to code injection vulnerabilities.',
-      [FindingType.HARDCODED_TOKEN]: 'Potential hardcoded secret or token found in the code.',
-      [FindingType.DYNAMIC_IMPORT]: 'Dynamic import usage detected, which may load untrusted code.',
-      [FindingType.REMOTE_CODE]: 'Code that loads or executes remote scripts detected.',
-      [FindingType.WEBASSEMBLY]: 'WebAssembly usage detected, which may bypass security controls.',
-      [FindingType.AI_THREAT]: 'AI-powered threat analysis detected potential security risk.',
-      [FindingType.BLOCKCHAIN_INTEGRITY]: 'Blockchain verification found integrity issues with package.',
-      [FindingType.SUPPLY_CHAIN_ATTACK]: 'Supply chain attack indicators detected in dependency.',
-      [FindingType.QUANTUM_VULNERABILITY]: 'Quantum-vulnerable cryptographic implementation detected.',
-      [FindingType.BEHAVIORAL_ANOMALY]: 'Behavioral analysis detected anomalous patterns.'
+      [FindingType.CVE]: 'Known vulnerability identified (CVE). Remediation: upgrade to the nearest fixed version and verify exploitability against your runtime path.',
+      [FindingType.EVAL_USAGE]: 'Use of eval() detected; this can enable code injection. Remediation: replace with explicit parsing/dispatch logic and reject untrusted input.',
+      [FindingType.HARDCODED_TOKEN]: 'Potential hardcoded secret/token found. Remediation: rotate the credential and move secret loading to environment or secret manager.',
+      [FindingType.DYNAMIC_IMPORT]: 'Dynamic import usage detected and may load untrusted code. Remediation: allowlist import targets and enforce integrity/version pinning.',
+      [FindingType.REMOTE_CODE]: 'Remote code loading behavior detected. Remediation: pin trusted origins, add SRI for scripts, and block dynamic remote execution paths.',
+      [FindingType.WEBASSEMBLY]: 'WebAssembly usage detected and may bypass expected controls. Remediation: restrict wasm sources in CSP and review binary provenance.',
+      [FindingType.AI_THREAT]: 'AI-assisted analysis flagged suspicious behavior. Remediation: validate prompt boundaries, output handling, and data-exfiltration guards.',
+      [FindingType.BLOCKCHAIN_INTEGRITY]: 'Integrity verification reported package mismatch. Remediation: re-verify artifact provenance and block deployment until signatures/checksums align.',
+      [FindingType.SUPPLY_CHAIN_ATTACK]: 'Supply-chain attack indicators detected. Remediation: freeze dependency versions, review transitive graph changes, and quarantine affected package lines.',
+      [FindingType.QUANTUM_VULNERABILITY]: 'Quantum-vulnerable cryptographic primitive detected. Remediation: plan migration to modern/post-quantum-safe options for long-lived sensitive data.',
+      [FindingType.BEHAVIORAL_ANOMALY]: 'Behavioral anomaly detected. Remediation: correlate with baseline telemetry and add targeted runtime controls before next release.'
     };
     return descriptions[type] || `Security issue detected: ${evidence}`;
   }

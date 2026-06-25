@@ -4,10 +4,10 @@ import { AnalysisEngine, type AnalysisEngineDeps, type AnalysisTaskInput } from 
 
 type DetectLibrariesFn = AnalysisEngineDeps['libraryDetector']['detectLibraries'];
 type GetVulnerabilitiesFn = AnalysisEngineDeps['vulnerabilityClient']['getVulnerabilities'];
-type AnalyzeWithAIFn = AnalysisEngineDeps['aiEngine']['analyzeWithAI'];
-type VerifyIntegrityFn = AnalysisEngineDeps['blockchainVerifier']['verifyPackageIntegrity'];
-type AnalyzeSupplyChainFn = AnalysisEngineDeps['blockchainVerifier']['analyzeSupplyChain'];
-type AnalyzeQuantumFn = AnalysisEngineDeps['quantumAnalyzer']['analyzeQuantumReadiness'];
+type AnalyzeThreatsFn = AnalysisEngineDeps['threatEngine']['analyzeThreats'];
+type VerifyIntegrityFn = AnalysisEngineDeps['integrityVerifier']['verifyPackageIntegrity'];
+type AnalyzeSupplyChainFn = AnalysisEngineDeps['integrityVerifier']['analyzeSupplyChain'];
+type AssessCryptoFn = AnalysisEngineDeps['cryptoAnalyzer']['assessCryptoPosture'];
 type GenerateReportFn = AnalysisEngineDeps['analyticsEngine']['generateSecurityReport'];
 type ReadObjectFn = AnalysisEngineDeps['readObjectAsString'];
 type FingerprintFn = AnalysisEngineDeps['generateScriptFingerprint'];
@@ -19,10 +19,10 @@ interface AnalysisEngineHarness {
   engine: AnalysisEngine;
   detectLibrariesMock: jest.MockedFunction<DetectLibrariesFn>;
   getVulnerabilitiesMock: jest.MockedFunction<GetVulnerabilitiesFn>;
-  analyzeWithAIMock: jest.MockedFunction<AnalyzeWithAIFn>;
+  analyzeThreatsMock: jest.MockedFunction<AnalyzeThreatsFn>;
   verifyIntegrityMock: jest.MockedFunction<VerifyIntegrityFn>;
   analyzeSupplyChainMock: jest.MockedFunction<AnalyzeSupplyChainFn>;
-  analyzeQuantumMock: jest.MockedFunction<AnalyzeQuantumFn>;
+  assessCryptoMock: jest.MockedFunction<AssessCryptoFn>;
   generateReportMock: jest.MockedFunction<GenerateReportFn>;
   readObjectMock: jest.MockedFunction<ReadObjectFn>;
   fingerprintMock: jest.MockedFunction<FingerprintFn>;
@@ -48,10 +48,10 @@ const createTask = (): AnalysisTaskInput => ({
 const createHarness = (): AnalysisEngineHarness => {
   const detectLibrariesMock: jest.MockedFunction<DetectLibrariesFn> = jest.fn<DetectLibrariesFn>();
   const getVulnerabilitiesMock: jest.MockedFunction<GetVulnerabilitiesFn> = jest.fn<GetVulnerabilitiesFn>();
-  const analyzeWithAIMock: jest.MockedFunction<AnalyzeWithAIFn> = jest.fn<AnalyzeWithAIFn>();
+  const analyzeThreatsMock: jest.MockedFunction<AnalyzeThreatsFn> = jest.fn<AnalyzeThreatsFn>();
   const verifyIntegrityMock: jest.MockedFunction<VerifyIntegrityFn> = jest.fn<VerifyIntegrityFn>();
   const analyzeSupplyChainMock: jest.MockedFunction<AnalyzeSupplyChainFn> = jest.fn<AnalyzeSupplyChainFn>();
-  const analyzeQuantumMock: jest.MockedFunction<AnalyzeQuantumFn> = jest.fn<AnalyzeQuantumFn>();
+  const assessCryptoMock: jest.MockedFunction<AssessCryptoFn> = jest.fn<AssessCryptoFn>();
   const generateReportMock: jest.MockedFunction<GenerateReportFn> = jest.fn<GenerateReportFn>();
   const readObjectMock: jest.MockedFunction<ReadObjectFn> = jest.fn<ReadObjectFn>();
   const fingerprintMock: jest.MockedFunction<FingerprintFn> = jest.fn<FingerprintFn>();
@@ -62,12 +62,12 @@ const createHarness = (): AnalysisEngineHarness => {
   const deps: AnalysisEngineDeps = {
     libraryDetector: { detectLibraries: detectLibrariesMock },
     vulnerabilityClient: { getVulnerabilities: getVulnerabilitiesMock },
-    aiEngine: { analyzeWithAI: analyzeWithAIMock },
-    blockchainVerifier: {
+    threatEngine: { analyzeThreats: analyzeThreatsMock },
+    integrityVerifier: {
       verifyPackageIntegrity: verifyIntegrityMock,
       analyzeSupplyChain: analyzeSupplyChainMock,
     },
-    quantumAnalyzer: { analyzeQuantumReadiness: analyzeQuantumMock },
+    cryptoAnalyzer: { assessCryptoPosture: assessCryptoMock },
     analyticsEngine: { generateSecurityReport: generateReportMock },
     readObjectAsString: readObjectMock,
     generateScriptFingerprint: fingerprintMock,
@@ -80,10 +80,10 @@ const createHarness = (): AnalysisEngineHarness => {
     engine: new AnalysisEngine(deps),
     detectLibrariesMock,
     getVulnerabilitiesMock,
-    analyzeWithAIMock,
+    analyzeThreatsMock,
     verifyIntegrityMock,
     analyzeSupplyChainMock,
-    analyzeQuantumMock,
+    assessCryptoMock,
     generateReportMock,
     readObjectMock,
     fingerprintMock,
@@ -121,10 +121,10 @@ describe('AnalysisEngine integration orchestration', () => {
       },
     );
 
-    harness.analyzeWithAIMock.mockResolvedValue({ riskAssessment: { overallRisk: 'high' } });
+    harness.analyzeThreatsMock.mockResolvedValue({ riskAssessment: { overallRisk: 'high' } });
     harness.verifyIntegrityMock.mockResolvedValue({ integrityStatus: 'verified' });
     harness.analyzeSupplyChainMock.mockResolvedValue({ riskAssessment: { level: 'medium' } });
-    harness.analyzeQuantumMock.mockResolvedValue({ overallReadiness: 'moderate' });
+    harness.assessCryptoMock.mockResolvedValue({ overallReadiness: 'moderate' });
     harness.generateReportMock.mockResolvedValue({ type: 'security', title: 'Generated report' });
 
     const result = await harness.engine.analyze(task);
@@ -168,10 +168,10 @@ describe('AnalysisEngine integration orchestration', () => {
       .mockResolvedValueOnce([]);
 
     harness.getVulnerabilitiesMock.mockRejectedValue(new Error('provider unavailable'));
-    harness.analyzeWithAIMock.mockResolvedValue({ riskAssessment: { overallRisk: 'low' } });
+    harness.analyzeThreatsMock.mockResolvedValue({ riskAssessment: { overallRisk: 'low' } });
     harness.verifyIntegrityMock.mockRejectedValue(new Error('integrity service unavailable'));
     harness.analyzeSupplyChainMock.mockResolvedValue({ riskAssessment: { level: 'low' } });
-    harness.analyzeQuantumMock.mockResolvedValue({ overallReadiness: 'high' });
+    harness.assessCryptoMock.mockResolvedValue({ overallReadiness: 'high' });
     harness.generateReportMock.mockResolvedValue({ type: 'security', title: 'Fallback report' });
 
     const result = await harness.engine.analyze(task);

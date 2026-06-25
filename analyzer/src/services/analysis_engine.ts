@@ -2,7 +2,7 @@
  * Dependency diagram:
  * AnalysisWorker -> ScanService -> AnalysisEngine
  * AnalysisEngine -> LibraryDetector/VulnerabilityFeedClient
- * AnalysisEngine -> AI/Blockchain/Quantum/Analytics engines
+ * AnalysisEngine -> threat / integrity / crypto / analytics engines
  */
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -13,7 +13,7 @@ import {
   type Finding,
   type RiskLevel,
 } from '@shieldeye/shared';
-import { AdvancedRiskCalculator } from '../analysis/risk-calculator';
+import { ScanRiskCalculator } from '../analysis/risk-calculator';
 import { logger } from '../logger';
 
 export interface AnalysisTaskInput {
@@ -41,15 +41,15 @@ export interface AnalysisEngineDeps {
   vulnerabilityClient: {
     getVulnerabilities(name: string, version?: string): Promise<any[]>;
   };
-  aiEngine: {
-    analyzeWithAI(libraries: Library[], findings: Finding[], domAnalysis: any, artifacts: unknown): Promise<any>;
+  threatEngine: {
+    analyzeThreats(libraries: Library[], findings: Finding[], domAnalysis: any, artifacts: unknown): Promise<any>;
   };
-  blockchainVerifier: {
+  integrityVerifier: {
     verifyPackageIntegrity(name: string, version: string, content: Buffer): Promise<any>;
     analyzeSupplyChain(libraries: Library[]): Promise<any>;
   };
-  quantumAnalyzer: {
-    analyzeQuantumReadiness(libraries: Library[]): Promise<any>;
+  cryptoAnalyzer: {
+    assessCryptoPosture(libraries: Library[]): Promise<any>;
   };
   analyticsEngine: {
     generateSecurityReport(input: { libraries: Library[]; findings: Finding[]; aiAnalysis: any; integrityReports: any[] }): Promise<any>;
@@ -172,7 +172,7 @@ export class AnalysisEngine {
           library.detectedVersion,
         );
         library.vulnerabilities = vulnerabilities;
-        library.riskScore = Math.round(AdvancedRiskCalculator.calculateLibraryRiskScore(library, findings));
+        library.riskScore = Math.round(ScanRiskCalculator.calculateLibraryRiskScore(library, findings));
       } catch (error) {
         logger.warn('Failed to fetch vulnerabilities for library', {
           scanId,
@@ -183,13 +183,13 @@ export class AnalysisEngine {
       }
     }
 
-    const aiAnalysis = await this.deps.aiEngine.analyzeWithAI(libraries, findings, domAnalysis, artifacts);
+    const aiAnalysis = await this.deps.threatEngine.analyzeThreats(libraries, findings, domAnalysis, artifacts);
 
     const integrityReports: any[] = [];
     for (const library of libraries) {
       try {
         const mockContent = Buffer.from(`mock-content-${library.name}`);
-        const integrityReport = await this.deps.blockchainVerifier.verifyPackageIntegrity(
+        const integrityReport = await this.deps.integrityVerifier.verifyPackageIntegrity(
           library.name,
           library.detectedVersion || '1.0.0',
           mockContent,
@@ -200,9 +200,9 @@ export class AnalysisEngine {
       }
     }
 
-    const supplyChainAnalysis = await this.deps.blockchainVerifier.analyzeSupplyChain(libraries);
-    const quantumReadiness = await this.deps.quantumAnalyzer.analyzeQuantumReadiness(libraries);
-    const riskAssessment = AdvancedRiskCalculator.calculateGlobalRiskScore(libraries, findings);
+    const supplyChainAnalysis = await this.deps.integrityVerifier.analyzeSupplyChain(libraries);
+    const quantumReadiness = await this.deps.cryptoAnalyzer.assessCryptoPosture(libraries);
+    const riskAssessment = ScanRiskCalculator.calculateGlobalRiskScore(libraries, findings);
 
     const analyticsReport = await this.deps.analyticsEngine.generateSecurityReport({
       libraries,

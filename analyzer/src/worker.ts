@@ -13,11 +13,11 @@ import {
 } from '@shieldeye/shared';
 import { logger } from './logger';
 import { EventEmitter } from 'events';
-import { AIThreatIntelligenceEngine } from './ai/threat-intelligence';
-import { BlockchainIntegrityVerifier } from './blockchain/integrity-verifier';
-import { RealTimeMonitoringSystem } from './monitoring/realtime-monitor';
-import { AdvancedAnalyticsEngine } from './reporting/advanced-analytics';
-import { QuantumCryptoAnalyzer } from './quantum/crypto-analyzer';
+import { ThreatIntelligenceEngine } from './intel/threat-intelligence';
+import { IntegrityVerifier } from './integrity/integrity-verifier';
+import { MonitoringSystem } from './monitoring/monitor';
+import { AnalyticsEngine } from './reporting/analytics';
+import { CryptoAnalyzer } from './crypto/crypto-analyzer';
 import { ScanService } from './services/scan_service';
 import { AnalysisEngine } from './services/analysis_engine';
 import { ResultPersister } from './services/result_persister';
@@ -29,11 +29,11 @@ export class AnalysisWorker extends EventEmitter {
   private analysisQueue!: import('bull').Queue<any>;
   private libraryDetector: LibraryDetector;
   private vulnerabilityClient: VulnerabilityFeedClient;
-  private aiEngine: AIThreatIntelligenceEngine;
-  private blockchainVerifier: BlockchainIntegrityVerifier;
-  private monitoringSystem: RealTimeMonitoringSystem;
-  private analyticsEngine: AdvancedAnalyticsEngine;
-  private quantumAnalyzer: QuantumCryptoAnalyzer;
+  private threatEngine: ThreatIntelligenceEngine;
+  private integrityVerifier: IntegrityVerifier;
+  private monitoringSystem: MonitoringSystem;
+  private analyticsEngine: AnalyticsEngine;
+  private cryptoAnalyzer: CryptoAnalyzer;
   private scanService!: ScanService;
   private analysisEngineService!: AnalysisEngine;
   private resultPersister!: ResultPersister;
@@ -51,22 +51,38 @@ export class AnalysisWorker extends EventEmitter {
     return endpoint.endsWith(':443') || endpoint.endsWith(':9443');
   }
 
+  private parseMinioEndpoint(endpoint: string): { host: string; port: number } {
+    const trimmed = endpoint.trim();
+    // IPv6 literal in brackets, optional port: [::1] or [::1]:9000
+    const bracket = trimmed.match(/^\[(.+)\](?::(\d+))?$/);
+    if (bracket) {
+      return { host: bracket[1], port: bracket[2] ? parseInt(bracket[2], 10) : 9000 };
+    }
+    // Only treat a single trailing colon as host:port; bare IPv6 (multiple colons) stays the host.
+    const idx = trimmed.lastIndexOf(':');
+    if (idx === -1 || trimmed.indexOf(':') !== idx) {
+      return { host: trimmed, port: 9000 };
+    }
+    const port = parseInt(trimmed.slice(idx + 1), 10);
+    return { host: trimmed.slice(0, idx), port: Number.isFinite(port) && port > 0 ? port : 9000 };
+  }
+
   constructor() {
     super();
 
     // Initialize advanced engines first
-    this.aiEngine = new AIThreatIntelligenceEngine();
-    this.blockchainVerifier = new BlockchainIntegrityVerifier();
-    this.monitoringSystem = new RealTimeMonitoringSystem(
-      this.aiEngine,
-      this.blockchainVerifier,
+    this.threatEngine = new ThreatIntelligenceEngine();
+    this.integrityVerifier = new IntegrityVerifier();
+    this.monitoringSystem = new MonitoringSystem(
+      this.threatEngine,
+      this.integrityVerifier,
       8080
     );
-    this.analyticsEngine = new AdvancedAnalyticsEngine(
-      this.aiEngine,
-      this.blockchainVerifier
+    this.analyticsEngine = new AnalyticsEngine(
+      this.threatEngine,
+      this.integrityVerifier
     );
-    this.quantumAnalyzer = new QuantumCryptoAnalyzer();
+    this.cryptoAnalyzer = new CryptoAnalyzer();
 
     this.setupEventHandlers();
 
@@ -80,9 +96,10 @@ export class AnalysisWorker extends EventEmitter {
     // Initialize MinIO
     const minioEndpoint = process.env.MINIO_ENDPOINT || 'localhost:9000';
     const minioUseSsl = this.resolveMinioUseSsl(minioEndpoint);
+    const { host: minioHost, port: minioPort } = this.parseMinioEndpoint(minioEndpoint);
     this.minio = new Client({
-      endPoint: minioEndpoint.split(':')[0],
-      port: parseInt(minioEndpoint.split(':')[1]) || 9000,
+      endPoint: minioHost,
+      port: minioPort,
       useSSL: minioUseSsl,
       accessKey: process.env.MINIO_ACCESS_KEY || 'shieldeye',
       secretKey: process.env.MINIO_SECRET_KEY || 'shieldeye_dev'
@@ -124,9 +141,9 @@ export class AnalysisWorker extends EventEmitter {
     this.analysisEngineService = new AnalysisEngine({
       libraryDetector: this.libraryDetector,
       vulnerabilityClient: this.vulnerabilityClient,
-      aiEngine: this.aiEngine,
-      blockchainVerifier: this.blockchainVerifier,
-      quantumAnalyzer: this.quantumAnalyzer,
+      threatEngine: this.threatEngine,
+      integrityVerifier: this.integrityVerifier,
+      cryptoAnalyzer: this.cryptoAnalyzer,
       analyticsEngine: this.analyticsEngine,
       readObjectAsString: (bucket: string, objectName: string) => this.readObjectAsString(bucket, objectName),
       generateScriptFingerprint: (content: string) => this.generateScriptFingerprint(content),
@@ -145,14 +162,14 @@ export class AnalysisWorker extends EventEmitter {
   }
 
   private setupEventHandlers(): void {
-    // AI Engine events
-    this.aiEngine.on('analysisComplete', (result: any) => {
-      logger.info('AI analysis completed', { threatScore: result.riskAssessment.overallRisk });
-      this.emit('aiAnalysisComplete', result);
+    // Threat engine events
+    this.threatEngine.on('analysisComplete', (result: any) => {
+      logger.info('Threat analysis completed', { threatScore: result.riskAssessment.overallRisk });
+      this.emit('threatAnalysisComplete', result);
     });
 
-    // Blockchain events
-    this.blockchainVerifier.on('integrityVerified', (report: any) => {
+    // Integrity events
+    this.integrityVerifier.on('integrityVerified', (report: any) => {
       logger.info('Integrity verification completed', { 
         package: report.packageName, 
         status: report.integrityStatus 
@@ -179,12 +196,12 @@ export class AnalysisWorker extends EventEmitter {
       this.emit('reportGenerated', report);
     });
 
-    // Quantum analyzer events
-    this.quantumAnalyzer.on('quantumAnalysisComplete', (report: any) => {
-      logger.info('Quantum readiness analysis completed', { 
-        readiness: report.overallReadiness 
+    // Crypto analyzer events
+    this.cryptoAnalyzer.on('cryptoAnalysisComplete', (report: any) => {
+      logger.info('Crypto posture analysis completed', {
+        readiness: report.overallReadiness
       });
-      this.emit('quantumAnalysisComplete', report);
+      this.emit('cryptoAnalysisComplete', report);
     });
   }
 

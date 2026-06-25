@@ -23,7 +23,7 @@ class ShieldEyeApplication(Gtk.Application):
     def __init__(self):
         super().__init__(
             application_id='com.shieldeye.professional',
-            flags=Gio.ApplicationFlags.FLAGS_NONE
+            flags=Gio.ApplicationFlags.NON_UNIQUE
         )
         
         self.logger = setup_logger('ShieldEye')

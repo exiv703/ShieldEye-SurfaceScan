@@ -7,8 +7,19 @@ export class StorageManager {
   private bucketName: string;
 
   private parseEndpoint(endpoint: string): { host: string; port: number } {
-    const [host, rawPort] = endpoint.split(':');
-    const port = Number.parseInt(rawPort || '', 10);
+    const trimmed = endpoint.trim();
+
+    // IPv6 literal in brackets, optional port: [::1] or [::1]:9000
+    const bracket = trimmed.match(/^\[(.+)\](?::(\d+))?$/);
+    if (bracket) {
+      return { host: bracket[1], port: bracket[2] ? Number.parseInt(bracket[2], 10) : 9000 };
+    }
+
+    // Only treat a single trailing colon as host:port; bare IPv6 (multiple colons) stays the host.
+    const idx = trimmed.lastIndexOf(':');
+    const host = idx === -1 || trimmed.indexOf(':') !== idx ? trimmed : trimmed.slice(0, idx);
+    const rawPort = idx === -1 || trimmed.indexOf(':') !== idx ? '' : trimmed.slice(idx + 1);
+    const port = Number.parseInt(rawPort, 10);
 
     if (!host) {
       throw new Error(`Invalid MinIO endpoint '${endpoint}': missing host`);

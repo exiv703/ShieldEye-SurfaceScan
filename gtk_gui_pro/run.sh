@@ -49,10 +49,12 @@ start_full_stack_rebuild() {
         return 1
     fi
 
+    ensure_docker_running || return 1
+
     if (
         cd "${PROJECT_ROOT}" && \
-        docker compose build api renderer analyzer && \
-        docker compose up -d postgres redis minio api renderer analyzer
+        docker_compose build api renderer analyzer && \
+        docker_compose up -d postgres redis minio api renderer analyzer
     ); then
         print_success "Backend rebuilt and services started."
     else
@@ -178,17 +180,76 @@ check_dependencies() {
 
 setup_environment() {
     print_info "Setting up environment..."
-    
+
     # Set API URL
     export SHIELDEYE_API_URL="${SHIELDEYE_API_URL:-http://localhost:3000}"
-    
+
     # Set GTK theme
     export GTK_THEME="${GTK_THEME:-Adwaita:dark}"
-    
+
     # Python path
     export PYTHONPATH="${SCRIPT_DIR}/src:${PYTHONPATH:-}"
-    
+
+    # GTK display backend — prefer Wayland when available, fall back to X11
+    if [[ -z "${GDK_BACKEND:-}" ]]; then
+        if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+            export GDK_BACKEND="wayland"
+        elif [[ -n "${DISPLAY:-}" ]]; then
+            export GDK_BACKEND="x11"
+        fi
+    fi
+
     print_success "Environment configured"
+}
+
+DOCKER_SUDO=""
+
+ensure_docker_running() {
+    if docker info &>/dev/null 2>&1; then
+        return 0
+    fi
+
+    print_warning "Docker daemon is not running."
+    print_info "Attempting to start Docker daemon via systemctl (requires sudo)..."
+    # 'enable --now' starts it now AND on every future boot, so this prompt is one-time.
+    if ! sudo systemctl enable --now docker 2>/dev/null; then
+        if ! sudo systemctl start docker 2>/dev/null; then
+            print_error "Could not start Docker daemon."
+            print_info "Fix: run   sudo systemctl start docker   then retry."
+            return 1
+        fi
+    fi
+    print_success "Docker daemon started (and enabled on boot)."
+    sleep 2
+
+    if docker info &>/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Daemon running but user has no socket access — not in docker group yet
+    print_info "User '$USER' is not in the 'docker' group — fixing..."
+    if sudo usermod -aG docker "$USER" 2>/dev/null; then
+        print_success "Added '$USER' to docker group."
+        print_info "(Re-login after this session for permanent effect — using sudo for now)"
+    fi
+
+    if sudo docker info &>/dev/null 2>&1; then
+        DOCKER_SUDO="sudo"
+        export DOCKER_SUDO
+        return 0
+    fi
+
+    print_error "Cannot connect to Docker socket even with sudo."
+    return 1
+}
+
+# Wrapper so all docker compose calls respect DOCKER_SUDO
+docker_compose() {
+    if [[ -n "${DOCKER_SUDO:-}" ]]; then
+        sudo docker compose "$@"
+    else
+        docker compose "$@"
+    fi
 }
 
 install_python_deps() {
@@ -238,11 +299,13 @@ reset_demo_data() {
         return 1
     fi
 
+    ensure_docker_running || true  # sets DOCKER_SUDO if needed; exec requires containers already up
+
     if is_port_listening 3000; then
         print_warning "Port 3000 appears to be already in use. If the API is already running, you can ignore this."
     fi
 
-    if (cd "${PROJECT_ROOT}" && docker compose exec -T postgres psql -U shieldeye -d shieldeye -c "TRUNCATE TABLE findings, libraries, scripts, vulnerability_cache, scans RESTART IDENTITY CASCADE;"); then
+    if (cd "${PROJECT_ROOT}" && docker_compose exec -T postgres psql -U shieldeye -d shieldeye -c "TRUNCATE TABLE findings, libraries, scripts, vulnerability_cache, scans RESTART IDENTITY CASCADE;"); then
         print_success "Analytics data reset completed."
     else
         print_error "Failed to reset analytics data. Check docker logs for details."
@@ -261,17 +324,19 @@ check_api_connection() {
     print_warning "API not accessible at ${SHIELDEYE_API_URL}"
 
     if command -v docker &> /dev/null && docker compose version &> /dev/null; then
-        print_info "Attempting to start backend services via Docker Compose..."
-        (
-          cd "${PROJECT_ROOT}" && \
-          docker compose up -d postgres redis minio api renderer analyzer
-        )
+        ensure_docker_running || return 1
 
-        if wait_for_api "${SHIELDEYE_API_URL}/health" "${SHIELDEYE_API_TIMEOUT:-30}" "${SHIELDEYE_API_POLL_INTERVAL:-2}"; then
-            print_success "Backend started. API is now accessible at ${SHIELDEYE_API_URL}"
-            return 0
+        print_info "Attempting to start backend services via Docker Compose..."
+        if (cd "${PROJECT_ROOT}" && docker_compose up -d postgres redis minio api renderer analyzer); then
+            if wait_for_api "${SHIELDEYE_API_URL}/health" "${SHIELDEYE_API_TIMEOUT:-30}" "${SHIELDEYE_API_POLL_INTERVAL:-2}"; then
+                print_success "Backend started. API is now accessible at ${SHIELDEYE_API_URL}"
+                return 0
+            else
+                print_warning "Backend start attempted, but API is still not reachable. GUI will run in offline mode."
+                return 1
+            fi
         else
-            print_warning "Backend start attempted, but API is still not reachable. GUI will run in offline mode."
+            print_error "docker compose up failed. Check: cd \"${PROJECT_ROOT}\" && docker compose logs"
             return 1
         fi
     else
@@ -287,7 +352,7 @@ launch_application() {
     
     cd "${SCRIPT_DIR}"
     
-    if DBUS_SESSION_BUS_ADDRESS= python3 main.py "$@"; then
+    if python3 main.py "$@"; then
         print_success "Application exited normally"
     else
         exit_code=$?
@@ -366,7 +431,9 @@ start_backend_only() {
         return 1
     fi
 
-    if (cd "${PROJECT_ROOT}" && docker compose up -d postgres redis minio renderer analyzer api); then
+    ensure_docker_running || return 1
+
+    if (cd "${PROJECT_ROOT}" && docker_compose up -d postgres redis minio renderer analyzer api); then
         print_success "Backend services started."
         echo "To stop them manually: cd \"${PROJECT_ROOT}\" && docker compose down"
     else
@@ -385,7 +452,9 @@ start_api_only() {
         return 1
     fi
 
-    if (cd "${PROJECT_ROOT}" && docker compose up -d api); then
+    ensure_docker_running || return 1
+
+    if (cd "${PROJECT_ROOT}" && docker_compose up -d api); then
         sleep 3
         if curl -sf "${SHIELDEYE_API_URL}/health" >/dev/null 2>&1; then
             print_success "API is running at ${SHIELDEYE_API_URL}"

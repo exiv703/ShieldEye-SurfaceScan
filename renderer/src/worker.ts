@@ -216,10 +216,16 @@ export class RenderWorker {
         let content = '';
         try {
           if (src) {
+            // Only forward the caller's headers (which may carry Authorization/Cookie)
+            // to same-origin resources; never leak them to third-party CDNs.
+            let sameOrigin = false;
+            try {
+              sameOrigin = new URL(src).origin === new URL(url).origin;
+            } catch {}
             content = await this.fetchTextWithRetry(src, {
               timeoutMs: Math.min(20000, timeoutMs),
               retries: 1,
-              headers,
+              headers: sameOrigin ? headers : undefined,
               userAgent,
               referer: url,
             });
@@ -376,7 +382,8 @@ export class RenderWorker {
     url: string,
     timeoutMs: number,
     maxBytes: number,
-    headers: Record<string, string>
+    headers: Record<string, string>,
+    redirectsLeft: number = 5
   ): Promise<string> {
     return new Promise((resolve, reject) => {
       try {
@@ -394,12 +401,26 @@ export class RenderWorker {
           (res) => {
             if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
             clearTimeout(timeout);
-            // follow redirect (keep headers; resolve relative Location)
+            if (redirectsLeft <= 0) {
+              reject(new Error('Too many redirects'));
+              return;
+            }
             let nextUrl = res.headers.location;
             try {
               nextUrl = new URL(nextUrl, url).href;
-            } catch {}
-            this.fetchTextOnce(nextUrl as string, timeoutMs, maxBytes, headers).then(resolve).catch(reject);
+            } catch {
+              reject(new Error('Invalid redirect Location'));
+              return;
+            }
+            // Re-apply SSRF policy to the redirect target: a 3xx could point at
+            // localhost, a private range, or cloud metadata.
+            if (!this.isUrlAllowed(nextUrl)) {
+              reject(new Error('Redirect target not allowed by SSRF policy'));
+              return;
+            }
+            this.fetchTextOnce(nextUrl as string, timeoutMs, maxBytes, headers, redirectsLeft - 1)
+              .then(resolve)
+              .catch(reject);
             return;
           }
           if (res.statusCode && res.statusCode >= 400) {

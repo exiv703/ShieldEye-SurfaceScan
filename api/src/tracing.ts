@@ -214,18 +214,17 @@ export const traceAIAnalysis = async <T>(
   );
 };
 
-export const traceBlockchainVerification = async <T>(
+export const traceIntegrityVerification = async <T>(
   verificationType: string,
   packageName: string,
   fn: () => Promise<T>
 ): Promise<T> => {
   return withSpan(
-    `blockchain.verification.${verificationType}`,
+    `integrity.verification.${verificationType}`,
     async (span) => {
       span.setAttributes({
-        'blockchain.verification.type': verificationType,
+        'integrity.verification.type': verificationType,
         'package.name': packageName,
-        'blockchain.network': 'ethereum',
       });
       return await fn();
     }

@@ -10,7 +10,7 @@ export interface IntegrityReport {
   details: any;
 }
 
-export class BlockchainIntegrityVerifier extends EventEmitter {
+export class IntegrityVerifier extends EventEmitter {
   constructor() {
     super();
   }

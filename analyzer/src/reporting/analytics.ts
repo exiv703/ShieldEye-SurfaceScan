@@ -2,8 +2,8 @@ import { EventEmitter } from 'events';
 import { promises as fs } from 'fs';
 import { logger } from '../logger';
 import { Library, Finding } from '@shieldeye/shared';
-import { AIThreatIntelligenceEngine, AIAnalysisResult } from '../ai/threat-intelligence';
-import { BlockchainIntegrityVerifier, IntegrityReport } from '../blockchain/integrity-verifier';
+import { ThreatIntelligenceEngine, ThreatAnalysisResult } from '../intel/threat-intelligence';
+import { IntegrityVerifier, IntegrityReport } from '../integrity/integrity-verifier';
 
 export interface AnalyticsReport {
   id: string;
@@ -49,24 +49,24 @@ export interface ChartData {
   data: any;
 }
 
-export class AdvancedAnalyticsEngine extends EventEmitter {
+export class AnalyticsEngine extends EventEmitter {
   private reports: Map<string, AnalyticsReport> = new Map();
-  private aiEngine: AIThreatIntelligenceEngine;
-  private blockchainVerifier: BlockchainIntegrityVerifier;
+  private threatEngine: ThreatIntelligenceEngine;
+  private integrityVerifier: IntegrityVerifier;
 
   constructor(
-    aiEngine: AIThreatIntelligenceEngine,
-    blockchainVerifier: BlockchainIntegrityVerifier
+    threatEngine: ThreatIntelligenceEngine,
+    integrityVerifier: IntegrityVerifier
   ) {
     super();
-    this.aiEngine = aiEngine;
-    this.blockchainVerifier = blockchainVerifier;
+    this.threatEngine = threatEngine;
+    this.integrityVerifier = integrityVerifier;
   }
 
   async generateSecurityReport(scanData: {
     libraries: Library[];
     findings: Finding[];
-    aiAnalysis: AIAnalysisResult;
+    aiAnalysis: ThreatAnalysisResult;
     integrityReports: IntegrityReport[];
   }): Promise<AnalyticsReport> {
     const reportId = this.generateReportId('security');
@@ -81,18 +81,18 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
       title: 'Executive Summary',
       type: 'text',
       content: {
-        overview: 'Comprehensive security analysis with AI-powered insights',
+        overview: 'Security analysis of the client-side libraries detected on the page',
         keyFindings: [
           `Analyzed ${scanData.libraries.length} JavaScript libraries`,
           `Identified ${scanData.findings.length} security findings`,
-          `AI threat score: ${scanData.aiAnalysis.riskAssessment.overallRisk}`
+          `Threat score: ${scanData.aiAnalysis.riskAssessment.overallRisk}`
         ],
         riskLevel: this.calculateRiskLevel(scanData.aiAnalysis.riskAssessment.overallRisk)
       },
       insights: [
-        'AI-powered analysis provides predictive threat intelligence',
-        'Blockchain verification ensures supply chain integrity',
-        'Behavioral analysis detects runtime anomalies'
+        'Threat scoring is derived from detected libraries and findings',
+        'Dependency integrity checks flag tampered or unexpected packages',
+        'Findings include risky runtime patterns observed in scripts'
       ],
       priority: 'high'
     });
@@ -105,16 +105,15 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
       content: this.analyzeVulnerabilities(scanData.libraries),
       insights: [
         'Critical vulnerabilities require immediate attention',
-        'Vulnerability trends show improvement over time',
-        'AI predictions indicate future vulnerability patterns'
+        'Counts are grouped by severity across detected libraries'
       ],
       priority: 'high'
     });
 
-    // AI Threat Intelligence
+    // Threat signals
     sections.push({
-      id: 'ai_threat_intelligence',
-      title: 'AI Threat Intelligence',
+      id: 'threat_signals',
+      title: 'Threat Signals',
       type: 'table',
       content: {
         threatData: scanData.aiAnalysis.threatIntelligence,
@@ -122,15 +121,14 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
         behavioralAnalysis: scanData.aiAnalysis.behavioralAnalysis
       },
       insights: [
-        'AI models predict emerging threats with 94% accuracy',
-        'Behavioral patterns indicate normal application behavior',
-        'Supply chain risks identified through ML analysis'
+        'Signals are aggregated from library metadata and findings',
+        'Supply-chain risks are derived from package integrity checks'
       ],
       priority: 'high'
     });
 
     // Supply Chain Security
-    const supplyChainAnalysis = await this.blockchainVerifier.analyzeSupplyChain(scanData.libraries);
+    const supplyChainAnalysis = await this.integrityVerifier.analyzeSupplyChain(scanData.libraries);
     sections.push({
       id: 'supply_chain',
       title: 'Supply Chain Security',
@@ -141,9 +139,9 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
         recommendations: supplyChainAnalysis.recommendations
       },
       insights: [
-        'Blockchain verification provides tamper-proof integrity checks',
-        'Supply chain attacks detected through pattern analysis',
-        'Package authenticity verified through cryptographic proofs'
+        'Integrity checks compare packages against expected checksums',
+        'Mismatches may indicate tampering or unexpected versions',
+        'Unverified packages should be reviewed before deployment'
       ],
       priority: 'high'
     });
@@ -154,14 +152,14 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
     const report: AnalyticsReport = {
       id: reportId,
       type: 'security',
-      title: 'AI-Powered Security Analytics Report',
+      title: 'Security Analytics Report',
       generatedAt: new Date(),
       summary: {
         totalScans: 1,
         totalLibraries: scanData.libraries.length,
         totalVulnerabilities: scanData.libraries.reduce((sum, lib) => sum + lib.vulnerabilities.length, 0),
         averageRiskScore: scanData.libraries.reduce((sum, lib) => sum + lib.riskScore, 0) / scanData.libraries.length,
-        trendsOverview: 'AI analysis shows improving security posture with proactive threat management'
+        trendsOverview: 'Summary of detected libraries, findings and risk score for this scan'
       },
       sections,
       recommendations,
@@ -181,17 +179,15 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
     // Vulnerability Forecast
     sections.push({
       id: 'vulnerability_forecast',
-      title: 'AI Vulnerability Forecast',
+      title: 'Vulnerability Forecast',
       type: 'chart',
       content: {
         predictions: await this.generateVulnerabilityPredictions(historicalData),
-        confidence: 87,
         timeframe: '90 days'
       },
       insights: [
-        'AI models predict 15% increase in vulnerabilities',
-        'React ecosystem showing highest growth rate',
-        'Supply chain attacks expected to increase'
+        'Forecast is based on the supplied historical scan data',
+        'Trends are indicative only and depend on input volume'
       ],
       priority: 'high'
     });
@@ -199,13 +195,12 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
     // Risk Trend Analysis
     sections.push({
       id: 'risk_trends',
-      title: 'Risk Trend Prediction',
+      title: 'Risk Trend',
       type: 'chart',
       content: await this.generateRiskTrends(historicalData),
       insights: [
-        'Overall risk stabilizing due to improved practices',
-        'Behavioral anomalies decreasing',
-        'AI accuracy improving with more data'
+        'Risk trend is computed from historical risk scores',
+        'More scans over time improve trend accuracy'
       ],
       priority: 'high'
     });
@@ -220,7 +215,7 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
         totalLibraries: 0,
         totalVulnerabilities: 0,
         averageRiskScore: 0,
-        trendsOverview: 'AI predictions indicate improving security posture'
+        trendsOverview: 'Trend projection based on historical scan data'
       },
       sections,
       recommendations: [],
@@ -296,8 +291,8 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
         category: 'security',
         priority: 'critical',
         title: 'Update Critical Vulnerabilities',
-        description: 'Address critical vulnerabilities identified by AI analysis',
-        impact: 'Reduces attack surface by 80%',
+        description: 'Update libraries with known critical vulnerabilities to patched versions',
+        impact: 'Removes the most severe known issues from the dependency set',
         effort: 'medium',
         timeline: '24 hours'
       },
@@ -305,9 +300,9 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
         id: 'rec_2',
         category: 'security',
         priority: 'high',
-        title: 'Implement AI Monitoring',
-        description: 'Deploy continuous AI-powered threat monitoring',
-        impact: 'Improves threat detection by 300%',
+        title: 'Review Outdated Dependencies',
+        description: 'Audit and update outdated client-side dependencies',
+        impact: 'Reduces exposure to publicly disclosed vulnerabilities',
         effort: 'low',
         timeline: '1 week'
       }
@@ -344,20 +339,19 @@ export class AdvancedAnalyticsEngine extends EventEmitter {
   }
 
   private async generateVulnerabilityPredictions(data: any[]): Promise<any> {
-    void data;
+    // Naive projection from observed scan history; refine once enough data exists.
+    const recent = data.length;
     return {
-      next30Days: Math.floor(Math.random() * 10),
-      next90Days: Math.floor(Math.random() * 25),
-      confidence: 87
+      next30Days: recent,
+      next90Days: recent * 3,
+      sampleSize: recent
     };
   }
 
   private async generateRiskTrends(data: any[]): Promise<any> {
-    void data;
     return {
-      trend: 'decreasing',
-      expectedChange: -5,
-      confidence: 78
+      trend: data.length > 1 ? 'tracked' : 'insufficient-data',
+      sampleSize: data.length
     };
   }
 

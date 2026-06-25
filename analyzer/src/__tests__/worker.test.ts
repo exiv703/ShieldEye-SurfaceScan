@@ -62,39 +62,39 @@ jest.mock('../vulnerability/feed-client', () => {
 
 jest.mock('../analysis/risk-calculator', () => {
   return {
-    AdvancedRiskCalculator: jest.fn().mockImplementation(() => ({
+    ScanRiskCalculator: jest.fn().mockImplementation(() => ({
       calculateOverallRisk: jest.fn().mockReturnValue({ score: 0 }),
     })),
   };
 });
 
-jest.mock('../ai/threat-intelligence', () => {
+jest.mock('../intel/threat-intelligence', () => {
   return {
-    AIThreatIntelligenceEngine: jest.fn().mockImplementation(() => new EventEmitter()),
+    ThreatIntelligenceEngine: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 
-jest.mock('../blockchain/integrity-verifier', () => {
+jest.mock('../integrity/integrity-verifier', () => {
   return {
-    BlockchainIntegrityVerifier: jest.fn().mockImplementation(() => new EventEmitter()),
+    IntegrityVerifier: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 
-jest.mock('../monitoring/realtime-monitor', () => {
+jest.mock('../monitoring/monitor', () => {
   return {
-    RealTimeMonitoringSystem: jest.fn().mockImplementation(() => new EventEmitter()),
+    MonitoringSystem: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 
-jest.mock('../reporting/advanced-analytics', () => {
+jest.mock('../reporting/analytics', () => {
   return {
-    AdvancedAnalyticsEngine: jest.fn().mockImplementation(() => new EventEmitter()),
+    AnalyticsEngine: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 
-jest.mock('../quantum/crypto-analyzer', () => {
+jest.mock('../crypto/crypto-analyzer', () => {
   return {
-    QuantumCryptoAnalyzer: jest.fn().mockImplementation(() => new EventEmitter()),
+    CryptoAnalyzer: jest.fn().mockImplementation(() => new EventEmitter()),
   };
 });
 

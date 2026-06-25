@@ -7,31 +7,11 @@ export class BrowserManager {
   private contexts: Map<string, BrowserContext> = new Map();
   private readonly componentName = 'browser-manager';
 
-  private parseBooleanEnv(varName: string, defaultValue: boolean): boolean {
-    const raw = process.env[varName];
-    if (raw === undefined) return defaultValue;
-
-    const normalized = raw.trim().toLowerCase();
-    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
-    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
-
-    logger.warn('Invalid boolean environment value, falling back to default', {
-      component: this.componentName,
-      stage: 'config_parse',
-      envVar: varName,
-      received: raw,
-      defaultValue,
-    });
-    return defaultValue;
-  }
-
   private shouldIgnoreHttpsErrors(): boolean {
-    const requested = this.parseBooleanEnv('BROWSER_IGNORE_HTTPS_ERRORS', false);
+    const raw = (process.env.BROWSER_IGNORE_HTTPS_ERRORS || '').trim().toLowerCase();
+    const requested = raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
     if (requested && process.env.NODE_ENV === 'production') {
-      logger.warn('Ignoring HTTPS errors is blocked in production. Set NODE_ENV!=production for this override.', {
-        component: this.componentName,
-        stage: 'tls_guard',
-      });
+      logger.warn('Refusing to ignore HTTPS errors in production (set NODE_ENV!=production to override)');
       return false;
     }
     return requested;
@@ -214,6 +194,7 @@ export class BrowserManager {
     const networkResources: NetworkResource[] = [];
     const scripts: DOMAnalysis['scripts'] = { inline: [], external: [] };
     const sourceMaps: DOMAnalysis['sourceMaps'] = [];
+    const headerSourceMapUrls = new Set<string>();
 
     try {
       if (options.headers) {
@@ -248,19 +229,13 @@ export class BrowserManager {
             }
           }
 
-          // Check X-SourceMap or SourceMap headers (absolute or relative)
+          // Record X-SourceMap / SourceMap header targets for later fetch. Do NOT
+          // navigate here: this handler fires while the page under analysis is still
+          // loading, and page.goto() would redirect it away mid-scan.
           const headerSourceMap = headers['x-sourcemap'] || headers['sourcemap'];
           if (headerSourceMap) {
             try {
-              const smUrl = new URL(headerSourceMap, response.url()).href;
-              // Avoid duplicates
-              if (!sourceMaps.find((sm: { url: string; content?: string }) => sm.url === smUrl)) {
-                const smResp = await page.goto(smUrl);
-                if (smResp && smResp.ok()) {
-                  const smContent = await smResp.text();
-                  sourceMaps.push({ url: smUrl, content: smContent });
-                }
-              }
+              headerSourceMapUrls.add(new URL(headerSourceMap, response.url()).href);
             } catch (e) {
               logger.warn('Failed to resolve SourceMap header', { base: response.url(), header: headerSourceMap, error: e instanceof Error ? e.message : e });
             }
@@ -312,24 +287,39 @@ export class BrowserManager {
       for (const script of scripts.inline) {
         const sourceMapMatch = script.content.match(/\/\/\# sourceMappingURL=(.+)/);
         if (sourceMapMatch) {
-          const sourceMapUrl = new URL(sourceMapMatch[1], url).href;
-          if (!sourceMaps.find((sm: { url: string; content?: string }) => sm.url === sourceMapUrl)) {
-            try {
-              const response = await page.goto(sourceMapUrl);
-              if (response && response.ok()) {
-                const content = await response.text();
-                sourceMaps.push({ url: sourceMapUrl, content });
-              }
-            } catch (error) {
-              logger.warn('Failed to fetch source map from inline script', { sourceMapUrl, error: error instanceof Error ? error.message : error });
-            }
-          }
+          headerSourceMapUrls.add(new URL(sourceMapMatch[1], url).href);
+        }
+      }
+
+      // Fetch every discovered source map on a throwaway page so the analyzed page
+      // is never navigated away from the target URL.
+      for (const smUrl of headerSourceMapUrls) {
+        if (sourceMaps.find((sm: { url: string; content?: string }) => sm.url === smUrl)) continue;
+        const content = await this.fetchSourceMap(context, smUrl);
+        if (content !== null) {
+          sourceMaps.push({ url: smUrl, content });
         }
       }
 
       return { scripts, sourceMaps, resources: networkResources };
     } finally {
       await page.close();
+    }
+  }
+
+  private async fetchSourceMap(context: BrowserContext, smUrl: string): Promise<string | null> {
+    const smPage = await context.newPage();
+    try {
+      const resp = await smPage.goto(smUrl);
+      if (resp && resp.ok()) {
+        return await resp.text();
+      }
+      return null;
+    } catch (error) {
+      logger.warn('Failed to fetch source map', { smUrl, error: error instanceof Error ? error.message : error });
+      return null;
+    } finally {
+      await smPage.close();
     }
   }
 

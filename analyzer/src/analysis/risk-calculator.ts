@@ -1,6 +1,6 @@
 import { RiskCalculator, RiskLevel, FindingType, Vulnerability, Library, Finding } from '@shieldeye/shared';
 
-export class AdvancedRiskCalculator extends RiskCalculator {
+export class ScanRiskCalculator extends RiskCalculator {
   static calculateLibraryRiskScore(
     library: {
       name: string;

@@ -1,60 +1,93 @@
 <div align="center">
 
-# 🛡️ ShieldEye-SurfaceScan
+# 🛡️ ShieldEye SurfaceScan
 
-**Web Application Surface Mapper (v1.0.0)**  
-*Part of the [ShieldEye Security Toolkit](https://github.com/exiv703/ShieldEye-Core)*
+**Web attack-surface mapper**
 
-[![Version](https://img.shields.io/badge/version-v1.0.0-0A7F5A)](#)
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/exiv703/ShieldEye-SurfaceScan/test.yml?label=CI&logo=github)](https://github.com/exiv703/ShieldEye-SurfaceScan/actions/workflows/test.yml)
-[![Coverage](https://img.shields.io/badge/Coverage-85%25%2B-brightgreen)](#)
+*Subdomain discovery • Technology fingerprinting • Endpoint mapping*
 
-[What is SurfaceScan?](#-what-is-shieldeye-surfacescan) •
-[Features](#-key-features) •
-[Screenshots](#-screenshots) •
-[Architecture](#️-architecture) •
-[Quick Start](#-quick-start) •
-[Configuration](#️-configuration) •
-[API](#-api-usage) •
-[Contributing](#-contributing)
+[![Version](https://img.shields.io/badge/version-v1.0.0-1F6FEB?style=for-the-badge&labelColor=22272E)](#)
+[![Node.js](https://img.shields.io/badge/Node.js-18%2B-1F6FEB?logo=node.js&logoColor=white&style=for-the-badge&labelColor=22272E)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-1F6FEB?style=for-the-badge&labelColor=22272E)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/exiv703/ShieldEye-SurfaceScan/test.yml?label=CI&logo=github&style=for-the-badge&labelColor=22272E&logoColor=white)](https://github.com/exiv703/ShieldEye-SurfaceScan/actions/workflows/test.yml)
+
+[Features](#features) • [Screenshots](#screenshots) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Configuration](#configuration) • [API](#api-usage)
 
 </div>
 
 ---
 
-## 🎯 What is ShieldEye-SurfaceScan?
+## What is ShieldEye SurfaceScan?
 
-ShieldEye-SurfaceScan is a **security-focused web surface mapping engine** for discovering externally exposed assets and analyzing attack surface quality at scale.
+SurfaceScan maps the externally exposed surface of a web target: it discovers
+subdomains, verifies which ones actually resolve and respond, fingerprints the
+technology behind them, and crawls reachable endpoints within a fixed scope. The
+output is a clean JSON inventory of hosts, detected tech with confidence scores,
+and the endpoints it found.
 
-Maintainer note: this repo is biased toward conservative scan behavior. If in doubt, we prefer fewer requests over aggressive crawling.
+It's built around conservative scan behaviour. Discovery starts from passive
+OSINT sources (`crt.sh`, SecurityTrails) and only then does light active
+verification (DNS + HTTP `HEAD`). Crawling is bounded by depth and page caps and
+uses `GET`/`HEAD` only. If a target's host resolves to a private, loopback, or
+cloud-metadata address, it's rejected before any request goes out.
 
-It is designed for:
-- **Subdomain discovery** (passive + active validation)
-- **Technology fingerprinting** with explainable confidence scoring
-- **Endpoint mapping** with strict scope controls and rate safety
+It's aimed at people doing recon on assets they're responsible for: bug-bounty
+scope mapping, external-asset inventory, pre-engagement footprinting. It is not a
+full DAST scanner and won't try to exploit anything it finds.
 
-> ⚠️ **Authorized use only:** ShieldEye-SurfaceScan must only be used on systems you own or have explicit written permission to assess.
-
----
-
-## ✨ Key Features
-
-| Capability | What it does | Security value |
-|---|---|---|
-| 🔍 **Surface Discovery** | Passive OSINT via `crt.sh` and SecurityTrails (mocked in tests), then active DNS + HTTP `HEAD` verification | Finds real, reachable assets while reducing false positives |
-| 🛡️ **SSRF-Safe Validation** | Blocks localhost, private ranges, and metadata endpoints by default | Prevents scanner abuse and internal network pivoting |
-| 🧠 **Tech Fingerprinting** | Header analysis (`Server`, `X-Powered-By`), HTML signature matching, framework/script heuristics | Identifies stack exposure and probable framework footprint |
-| 📊 **Explainable Scoring** | `confidence_score` includes evidence and per-signal breakdown | Enables analyst trust, triage clarity, and auditability |
-| 🗺️ **Endpoint Mapping** | In-scope crawling with depth/page caps, `GET`/`HEAD` only | Maps reachable routes without unsafe crawling behavior |
-| 🧹 **Normalization + Dedupe** | Lowercased hosts, sorted query params, fragment removal | Produces stable endpoint inventories and clean diffing |
-| ⏱️ **Thread-Safe Rate Limiting** | Per-host token bucket + `Retry-After` handling | Minimizes disruption and adapts safely to target limits |
-| 🔐 **Production Foundations** | TLS-by-default (`rejectUnauthorized=true`), custom CA support, CI quality gates, pre-commit hooks | Safer defaults for real-world pipelines and team workflows |
+> ⚠️ **Authorized use only.** Only scan systems you own or have explicit written
+> permission to assess.
 
 ---
 
-## 🖼️ Screenshots
+## Features
+
+<table>
+<tr>
+<td width="50%">
+
+### Discovery
+- **Passive OSINT** via `crt.sh` and SecurityTrails
+- **Active verification** with DNS resolution + HTTP `HEAD`
+- **SSRF-safe**: loopback, private ranges, and metadata
+  endpoints are blocked, redirects re-checked
+
+</td>
+<td width="50%">
+
+### Fingerprinting
+- **Header analysis** (`Server`, `X-Powered-By`, …)
+- **HTML/JS signature matching** for frameworks
+- **Explainable scoring**: each `confidence_score`
+  carries a per-signal evidence breakdown
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### Endpoint mapping
+- **In-scope crawling** with depth and page caps
+- **`GET`/`HEAD` only**, no state-changing requests
+- **Normalization + dedupe**: lowercased hosts,
+  sorted query params, fragments stripped
+
+</td>
+<td width="50%">
+
+### Safe defaults
+- **Per-host rate limiting** (token bucket +
+  `Retry-After` handling)
+- **TLS validation on** by default, custom CA support
+- **CI quality gates**, pre-commit hooks, **72 tests** (Jest)
+
+</td>
+</tr>
+</table>
+
+---
+
+## Screenshots
 
 <div align="center">
 
@@ -70,53 +103,64 @@ It is designed for:
 
 ---
 
-## 🏗️ Architecture
+## Architecture
+
+Three independent stages behind a small REST API, so discovery, fingerprinting,
+and endpoint mapping can be tuned or tested without touching each other:
 
 ```text
 ┌─────────────────────────────────┐
-│   ShieldEye-SurfaceScan v1.0.0  │
-│   Web Surface Mapper            │
+│   ShieldEye SurfaceScan         │
+│   REST API (Node + TypeScript)  │
 └────────────┬────────────────────┘
              │
     ┌────────┴────────┐
     ▼                 ▼
-┌─────────┐    ┌─────────────┐
-│Discovery│    │Fingerprint  │
-│(OSINT+  │    │(Headers+    │
-│ DNS+HTTP)│   │ HTML+JS)    │
-└────┬────┘    └─────┬───────┘
-     │               │
-     ▼               ▼
-┌─────────────────────────┐
-│   Endpoint Mapper       │
-│ (Crawl + Dedupe + Rate) │
-└────────┬────────────────┘
-         │
-         ▼
-┌─────────────────────────┐
-│   Output: JSON findings │
-│   • host + status       │
-│   • tech + confidence   │
-│   • endpoints + methods │
-└─────────────────────────┘
+┌──────────┐   ┌──────────────┐
+│Discovery │   │Fingerprint   │
+│OSINT +   │   │Headers +     │
+│DNS + HTTP│   │HTML + JS     │
+└────┬─────┘   └──────┬───────┘
+     │                │
+     ▼                ▼
+┌─────────────────────────────┐
+│   Endpoint Mapper           │
+│   Crawl + Dedupe + Rate     │
+└────────────┬────────────────┘
+             ▼
+┌─────────────────────────────┐
+│   JSON findings             │
+│   • host + status           │
+│   • tech + confidence       │
+│   • endpoints + methods     │
+└─────────────────────────────┘
 ```
 
-Why this matters: this separation keeps discovery, fingerprinting, and endpoint mapping independently testable, so teams can tune scan depth or detection logic without destabilizing the rest of the pipeline.
+### Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| **API** | Node.js 18+, TypeScript, Express |
+| **Validation** | `zod` schemas on external-facing structures |
+| **Storage** | PostgreSQL + MinIO (via Docker Compose) |
+| **GUI (auxiliary)** | GTK / PyGObject (`gtk_gui_pro`) |
+| **Quality** | Jest, ESLint, pre-commit |
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-If you want the shortest path to "first scan": install deps, copy `.env`, run API, send one `curl`.
+Shortest path to a first scan: install deps, copy `.env`, run the API, send one
+`curl`.
 
-### Clone repository
+### 1. Clone
 
 ```bash
 git clone https://github.com/exiv703/ShieldEye-SurfaceScan.git
 cd ShieldEye-SurfaceScan
 ```
 
-### Install dependencies
+### 2. Install dependencies
 
 ```bash
 npm ci --prefix shared
@@ -124,26 +168,27 @@ npm ci --prefix api
 npm ci --prefix analyzer
 ```
 
-### Configure environment
+### 3. Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with secure values (`DB_PASSWORD`, `MINIO_SECRET_KEY`, `JWT_SECRET`, `ENCRYPTION_KEY`) before running in non-dev environments.
-For local-only hacking, you can start with placeholders and rotate them before pushing anywhere shared.
+Set real values for `DB_PASSWORD`, `MINIO_SECRET_KEY`, `JWT_SECRET`, and
+`ENCRYPTION_KEY` before running anywhere shared. Placeholders are fine for
+local-only work as long as you rotate them before pushing.
 
-### Run services (CLI-first workflow)
+### 4. Run
 
 ```bash
-# Option A: Full stack with containers
+# Full stack with containers
 docker compose up -d
 
-# Option B: Local API dev mode
+# or local API dev mode
 npm run dev --prefix api
 ```
 
-### Trigger a scan from CLI
+### 5. Trigger a scan
 
 ```bash
 curl -X POST http://localhost:3000/api/scans \
@@ -151,28 +196,26 @@ curl -X POST http://localhost:3000/api/scans \
   -d '{"url":"https://example.com"}'
 ```
 
-> 🧪 GUI is currently available as an auxiliary interface (`gtk_gui_pro`), but the primary v1.0.0 flow is API/CLI-driven.
->
-> Dev note: if scan creation works but results look empty, check API logs first — in practice this catches misconfigured env values faster than stepping through the GUI.
+The GTK GUI (`gtk_gui_pro`) exists as an auxiliary interface, but the primary
+v1.0.0 flow is API/CLI-driven. If a scan is created but results come back empty,
+check the API logs first.
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-### Security and runtime flags
-
-Real-world hint: keep `ENABLE_EXPERIMENTAL_API=false` on shared/staging unless someone is actively testing those routes.
+### Runtime flags
 
 | Variable | Default | Description |
 |---|---:|---|
-| `ENABLE_EXPERIMENTAL_API` | `false` | Enables experimental routes (`/api/monitoring`, `/api/blockchain`, `/api/quantum`, `/api/settings`) |
-| `ENABLE_MINIMAL_ROUTES` | `false` | Enables legacy minimal API router under `/api/minimal` |
-| `ENABLE_METRICS` | `true` | Exposes `/metrics` endpoint |
+| `ENABLE_EXPERIMENTAL_API` | `false` | Enables experimental stub routes (`/api/monitoring`, `/api/blockchain`, `/api/quantum`, `/api/settings`) |
+| `ENABLE_MINIMAL_ROUTES` | `false` | Enables the legacy minimal API router under `/api/minimal` |
+| `ENABLE_METRICS` | `true` | Exposes the `/metrics` endpoint |
 | `ENABLE_HEALTH_CHECKS` | `true` | Enables health/readiness/liveness endpoints |
-| `BROWSER_IGNORE_HTTPS_ERRORS` | `false` | Development-only toggle to bypass TLS certificate validation in renderer browser contexts |
-| `MINIO_USE_SSL` | _(auto by port or explicit)_ | Forces MinIO client TLS transport (`true`/`false`) across analyzer/renderer |
+| `BROWSER_IGNORE_HTTPS_ERRORS` | `false` | Dev-only: bypass TLS validation in renderer browser contexts |
+| `MINIO_USE_SSL` | _(auto / explicit)_ | Forces MinIO client TLS transport (`true`/`false`) |
 
-### TLS defaults (secure by default)
+### TLS (secure by default)
 
 | Variable | Default | Description |
 |---|---:|---|
@@ -181,22 +224,24 @@ Real-world hint: keep `ENABLE_EXPERIMENTAL_API=false` on shared/staging unless s
 | `TLS_CA_CERT_PATH` | _(unset)_ | Optional custom CA certificate path |
 | `TLS_MIN_VERSION` | `TLSv1.2` | Minimum accepted TLS version (`TLSv1.2` / `TLSv1.3`) |
 
+The experimental routes are intentionally stubs. Keep `ENABLE_EXPERIMENTAL_API=false`
+on anything shared unless someone is actively working on them.
+
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Document | Purpose |
 |---|---|
 | [`REQUIREMENTS.md`](REQUIREMENTS.md) | Platform requirements and setup baseline |
 | [`docs/guides/INTEGRATION_GUIDE.md`](docs/guides/INTEGRATION_GUIDE.md) | Backend + GUI integration notes |
-| [`docs/reports/SHIELDEYE_BACKEND_SCANNER_REPORT.md`](docs/reports/SHIELDEYE_BACKEND_SCANNER_REPORT.md) | Technical architecture/report context |
-| [ShieldEye-Core](https://github.com/exiv703/ShieldEye-Core) | Parent toolkit and reference architecture |
+| [`docs/reports/SHIELDEYE_BACKEND_SCANNER_REPORT.md`](docs/reports/SHIELDEYE_BACKEND_SCANNER_REPORT.md) | Architecture/report context |
 
 ---
 
-## 🔌 API Usage
+## API Usage
 
-### Core endpoints
+### Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -205,11 +250,11 @@ Real-world hint: keep `ENABLE_EXPERIMENTAL_API=false` on shared/staging unless s
 | `GET` | `/api/scans/:id/results` | Get scan results |
 | `GET` | `/api/scans/:id/surface` | Get mapped attack surface |
 | `GET` | `/health` | Health check |
-| `GET` | `/metrics` | Metrics endpoint (if enabled) |
+| `GET` | `/metrics` | Metrics (if enabled) |
 
-### Programmatic TypeScript example
+### Create and poll a scan (TypeScript)
 
-This is intentionally plain `fetch` (no SDK wrapper) so teams can paste it into scripts or CI smoke checks.
+Plain `fetch`, no SDK wrapper, so it drops straight into a script or CI smoke check:
 
 ```ts
 type CreateScanResponse = { id: string; status: string };
@@ -220,28 +265,21 @@ async function createAndPollScan(baseUrl: string, targetUrl: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: targetUrl }),
   });
+  if (!createRes.ok) throw new Error(`Scan creation failed: ${createRes.status}`);
 
-  if (!createRes.ok) {
-    throw new Error(`Scan creation failed: ${createRes.status}`);
-  }
-
-  const created = (await createRes.json()) as CreateScanResponse;
-  const scanId = created.id;
+  const { id: scanId } = (await createRes.json()) as CreateScanResponse;
 
   for (;;) {
     const statusRes = await fetch(`${baseUrl}/api/scans/${scanId}/status`);
     if (!statusRes.ok) throw new Error(`Status check failed: ${statusRes.status}`);
 
-    const statusData = await statusRes.json();
-    if (statusData.status === "completed") {
+    const { status } = await statusRes.json();
+    if (status === "completed") {
       const resultsRes = await fetch(`${baseUrl}/api/scans/${scanId}/results`);
       if (!resultsRes.ok) throw new Error(`Results fetch failed: ${resultsRes.status}`);
       return resultsRes.json();
     }
-
-    if (statusData.status === "failed") {
-      throw new Error(`Scan ${scanId} failed`);
-    }
+    if (status === "failed") throw new Error(`Scan ${scanId} failed`);
 
     await new Promise((r) => setTimeout(r, 1500));
   }
@@ -250,9 +288,7 @@ async function createAndPollScan(baseUrl: string, targetUrl: string) {
 
 ---
 
-## 🧪 Development
-
-### Test, lint, typecheck
+## Development
 
 ```bash
 # Lint
@@ -267,41 +303,37 @@ npx --no-install --prefix analyzer tsc --noEmit
 npm test --prefix api -- --ci
 npm test --prefix analyzer -- --ci
 
-# Coverage gate (target 85%+ release standard)
-npm test --prefix api -- --ci --coverage
-npm test --prefix analyzer -- --ci --coverage
-```
-
-### Pre-commit hooks
-
-```bash
+# Pre-commit hooks
 pip install pre-commit
 pre-commit install
-pre-commit run --all-files
 ```
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
-We welcome security-minded contributions.
+Keep changes small and test-backed. The things that matter here:
 
-Please follow these guidelines:
-1. Keep changes **small, scoped, and test-backed**.
-2. Follow **TypeScript + ESLint** conventions across Node services.
-3. Use clear typing (`zod` schemas, explicit interfaces/types) for externally facing structures.
-4. Add or update tests for scanner logic, validation, and orchestration behavior.
-5. Maintain secure defaults (SSRF protections, TLS validation, bounded crawling).
+- Type external-facing structures explicitly (`zod` schemas, interfaces).
+- Add or update tests for scanner, validation, and orchestration logic.
+- Don't weaken the secure defaults: SSRF protections, TLS validation, bounded
+  crawling.
 
-PR checklist:
-- [ ] Lint passes
-- [ ] Typecheck passes
-- [ ] Tests pass
-- [ ] Coverage maintained or improved
-- [ ] No secrets or unsafe defaults introduced
+Before opening a PR, make sure lint, typecheck, and tests pass and no secrets or
+unsafe defaults slipped in.
 
 ---
 
-## 📝 License
+## License
 
-This project is licensed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
+MIT - see [LICENSE](LICENSE). For educational and authorized security testing only.
+
+---
+
+## Related Projects
+
+Part of the **ShieldEye** toolkit:
+
+- **[ShieldEye Core](https://github.com/exiv703/ShieldEye-Core)** - network security scanner (Nmap + GTK4)
+- **[ShieldEye NeuralScan](https://github.com/exiv703/ShieldEye-NeuralScan)** - local source-code security scanner
+- **[ShieldEye ComplianceScan](https://github.com/exiv703/ShieldEye_ComplianceScan)** - GDPR / PCI-DSS / ISO 27001 compliance scanner

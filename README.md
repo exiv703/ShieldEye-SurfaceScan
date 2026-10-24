@@ -114,8 +114,8 @@ and endpoint mapping can be tuned or tested without touching each other:
 │   REST API (Node + TypeScript)  │
 └────────────┬────────────────────┘
              │
-    ┌────────┴────────┐
-    ▼                 ▼
+     ┌───────┴────────┐
+     ▼                ▼
 ┌──────────┐   ┌──────────────┐
 │Discovery │   │Fingerprint   │
 │OSINT +   │   │Headers +     │

@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /api
+      - /analyzer
+      - /renderer
+      - /shared
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /gtk_gui_pro
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directories:
+      - /api
+      - /analyzer
+      - /renderer
+      - /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

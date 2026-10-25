@@ -6,12 +6,13 @@
 
 *Subdomain discovery • Technology fingerprinting • Endpoint mapping*
 
-[![Version](https://img.shields.io/badge/version-v1.0.0-1F6FEB?style=for-the-badge&labelColor=22272E)](#)
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-1F6FEB?logo=node.js&logoColor=white&style=for-the-badge&labelColor=22272E)](https://nodejs.org/)
+[![CI](https://img.shields.io/github/actions/workflow/status/exiv703/ShieldEye-SurfaceScan/ci.yml?branch=main&label=CI&logo=github&logoColor=white&style=for-the-badge&labelColor=22272E)](https://github.com/exiv703/ShieldEye-SurfaceScan/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/exiv703/ShieldEye-SurfaceScan?display_name=tag&label=Release&color=1F6FEB&style=for-the-badge&labelColor=22272E)](https://github.com/exiv703/ShieldEye-SurfaceScan/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-1F6FEB?style=for-the-badge&labelColor=22272E)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/exiv703/ShieldEye-SurfaceScan/test.yml?label=CI&logo=github&style=for-the-badge&labelColor=22272E&logoColor=white)](https://github.com/exiv703/ShieldEye-SurfaceScan/actions/workflows/test.yml)
+[![Version](https://img.shields.io/badge/version-v1.0.0-1F6FEB?style=for-the-badge&labelColor=22272E)](https://github.com/exiv703/ShieldEye-SurfaceScan/releases)
+[![Node.js](https://img.shields.io/badge/Node.js-18%2B-1F6FEB?logo=node.js&logoColor=white&style=for-the-badge&labelColor=22272E)](https://nodejs.org/)
 
-[Features](#features) • [Screenshots](#screenshots) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Configuration](#configuration) • [API](#api-usage)
+[Features](#features) • [Screenshots](#screenshots) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Configuration](#configuration) • [Development](#development)
 
 </div>
 
@@ -114,8 +115,8 @@ and endpoint mapping can be tuned or tested without touching each other:
 │   REST API (Node + TypeScript)  │
 └────────────┬────────────────────┘
              │
-    ┌────────┴────────┐
-    ▼                 ▼
+     ┌───────┴────────┐
+     ▼                ▼
 ┌──────────┐   ┌──────────────┐
 │Discovery │   │Fingerprint   │
 │OSINT +   │   │Headers +     │
@@ -334,6 +335,6 @@ MIT - see [LICENSE](LICENSE). For educational and authorized security testing on
 
 Part of the **ShieldEye** toolkit:
 
-- **[ShieldEye Core](https://github.com/exiv703/ShieldEye-Core)** - network security scanner (Nmap + GTK4)
+- **[ShieldEye Core](https://github.com/exiv703/Shield-Eye-Core)** - network security scanner (Nmap + GTK4)
 - **[ShieldEye NeuralScan](https://github.com/exiv703/ShieldEye-NeuralScan)** - local source-code security scanner
 - **[ShieldEye ComplianceScan](https://github.com/exiv703/ShieldEye_ComplianceScan)** - GDPR / PCI-DSS / ISO 27001 compliance scanner

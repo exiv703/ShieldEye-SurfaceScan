@@ -18,7 +18,7 @@ pyyaml>=6.0
 asyncio-mqtt>=0.13.0
 
 # Charts and visualization (optional, for advanced charts)
-matplotlib>=3.7.0
+matplotlib>=3.11.2
 numpy>=1.24.0
 
 # Development and testing

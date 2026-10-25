@@ -1,6 +1,6 @@
 # ShieldEye Professional - Python Dependencies
 # Core HTTP and API
-requests>=2.31.0
+requests>=2.34.2
 aiohttp>=3.8.0
 
 # GTK and GUI
